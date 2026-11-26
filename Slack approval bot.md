@@ -6,19 +6,14 @@ They asked for planning only, on a personal branch, and for the uncommitted work
 The Slack app is already created in the workspace.
 Spec reference: README.md section 4 (Dashboard and Slack row), 5.4 (tables), 5.5 (approval flow), 9 (Person 4 list), 10 (slack_bolt, Socket Mode, xapp-/xoxb-, chat:write).
 
-## Step 1 - Branch and clean up (git only)
-1. `git checkout -b person4-slack` (from `main` at `764324e`).
-2. `git restore shared/store.py` - discards the only uncommitted change (pending_approvals / get_approval / decide_approval edits). Nothing else is uncommitted; `slack_bot.py` was never written.
-3. Branch stays local until the first real commit; then `git push -u origin person4-slack`.
-
-## Step 2 - Slack app setup checklist (in the Slack UI, by the user)
+## Step 1 - Slack app setup checklist (in the Slack UI, by the user)
 - Socket Mode: ON. App-level token with `connections:write` -> `SLACK_APP_TOKEN` (xapp-).
 - Interactivity & Shortcuts: ON (no Request URL needed with Socket Mode).
 - OAuth scope: `chat:write` -> reinstall app -> `SLACK_BOT_TOKEN` (xoxb-).
 - Create `#agent-approvals`, run `/invite @<bot name>`, copy the channel ID -> `SLACK_APPROVAL_CHANNEL`.
 - Put the three values in the local `.env` (never committed).
 
-## Step 3 - Bot design (to implement after approval)
+## Step 2 - Bot design (to implement after approval)
 **Process:** `slack_bot.py` at repo root, run with `python slack_bot.py`. Separate process; talks to the Gateway only through guard.db via `shared.store`.
 Dependencies: `slack_bolt`, `python-dotenv` (not installed yet).
 
