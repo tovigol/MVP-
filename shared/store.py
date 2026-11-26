@@ -1,19 +1,23 @@
 """SQLite storage for AgentGuard (guard.db). Spec: README.md sections 5.4-5.5.
 
-Each function opens its own short-lived connection, so the Gateway, the
-dashboard and the Slack bot (separate processes) can all use this module.
+Three processes share this file (Gateway, dashboard, Slack bot), so:
+  - WAL mode, so readers never block the writer;
+  - every function opens and CLOSES its own short-lived connection;
+  - tables are created on first use, so any process can start first.
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sqlite3
 import time
 import uuid
+from contextlib import closing, contextmanager
 from datetime import date, datetime
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent.parent / "guard.db"  # repo root
+DB_PATH = Path(os.environ.get("GUARD_DB", Path(__file__).resolve().parent.parent / "guard.db"))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -31,54 +35,62 @@ OUTCOMES = ("forwarded", "blocked", "approved", "rejected", "timeout", "error")
 APPROVAL_TIMEOUT_SECONDS = 60
 POLL_INTERVAL_SECONDS = 1.0
 
+_initialized: set[str] = set()
+
 
 def _now() -> str:
-    return datetime.now().isoformat(timespec="seconds")
-
-
-def connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return datetime.now().isoformat(timespec="seconds")  # local time, like the daily total
 
 
 def init_db() -> None:
-    with connect() as conn:
+    with closing(sqlite3.connect(DB_PATH, timeout=10)) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA)
+    _initialized.add(str(DB_PATH))
+
+
+@contextmanager
+def connect():
+    """A connection that commits on success, rolls back on error, and always closes."""
+    if str(DB_PATH) not in _initialized:
+        init_db()
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 # --- cumulative state ---------------------------------------------------------
 
-def daily_total_usd() -> float:
+def daily_payment_total() -> float:
     """Sum of amount_usd for today's payment events whose outcome is forwarded or approved."""
     with connect() as conn:
         row = conn.execute(
             """SELECT COALESCE(SUM(amount_usd), 0) FROM events
-               WHERE category = 'payment'
-                 AND substr(ts, 1, 10) = ?
+               WHERE category = 'payment' AND substr(ts, 1, 10) = ?
                  AND outcome IN ('forwarded', 'approved')""",
             (date.today().isoformat(),),
         ).fetchone()
     return float(row[0])
 
 
+daily_total_usd = daily_payment_total  # old name
+
+
 # --- events -------------------------------------------------------------------
 
-def log_event(tool: str, args: dict, decision, agent: str | None = None,
-              registry: dict | None = None) -> int:
-    """Logs a decision. Category and amount_usd are derived from the registry.
+def log_event(tool: str, args, decision, category: str | None = None,
+              amount_usd: float | None = None, agent: str | None = None) -> int:
+    """Logs a decision and returns the event id.
 
     Initial outcome: allow -> forwarded, deny -> blocked, ask -> NULL until
-    update_event_outcome() records approved / rejected / timeout.
+    update_outcome() records approved / rejected / timeout.
+    An allowed payment counts toward the daily total right away, so parallel
+    calls can't slip past the limit; update_outcome(error) removes it again.
     """
-    from . import policy  # local import avoids a circular import
-    if registry is None:
-        try:
-            registry = policy.load_registry()
-        except Exception:
-            registry = {}
-    category = policy.tool_entry(tool, registry).get("category")
-    amount_usd = policy.amount_usd_for(tool, args if isinstance(args, dict) else {}, registry)
     outcome = {"allow": "forwarded", "deny": "blocked"}.get(decision.effect)
     with connect() as conn:
         cur = conn.execute(
@@ -91,12 +103,14 @@ def log_event(tool: str, args: dict, decision, agent: str | None = None,
         return cur.lastrowid
 
 
-def update_event_outcome(event_id: int, outcome: str) -> None:
-    """Sets the final outcome (e.g. approved / rejected / timeout / error)."""
+def update_outcome(event_id: int, outcome: str) -> None:
     if outcome not in OUTCOMES:
         raise ValueError(f"invalid outcome: {outcome}")
     with connect() as conn:
         conn.execute("UPDATE events SET outcome = ? WHERE id = ?", (outcome, event_id))
+
+
+update_event_outcome = update_outcome  # old name
 
 
 def recent_events(limit: int = 100) -> list[dict]:
@@ -109,12 +123,10 @@ def recent_events(limit: int = 100) -> list[dict]:
 # --- approvals ----------------------------------------------------------------
 
 def create_approval(event_id: int) -> str:
-    approval_id = uuid.uuid4().hex
+    approval_id = uuid.uuid4().hex[:8]  # short, so a person can type it into approve.py
     with connect() as conn:
-        conn.execute(
-            "INSERT INTO approvals (id, event_id, status) VALUES (?, ?, 'pending')",
-            (approval_id, event_id),
-        )
+        conn.execute("INSERT INTO approvals (id, event_id, status) VALUES (?, ?, 'pending')",
+                     (approval_id, event_id))
     return approval_id
 
 
@@ -131,7 +143,7 @@ def pending_approvals() -> list[dict]:
 
 
 def decide_approval(approval_id: str, status: str, decided_by: str) -> bool:
-    """Called by the Slack bot on a button click. Only a pending row can be decided."""
+    """Slack button / approve.py. Only a pending row can be decided; returns True if it was."""
     if status not in ("approved", "rejected"):
         raise ValueError(f"invalid status: {status}")
     with connect() as conn:
@@ -143,30 +155,22 @@ def decide_approval(approval_id: str, status: str, decided_by: str) -> bool:
         return cur.rowcount == 1
 
 
-def _approval_status(approval_id: str) -> str | None:
+def approval_status(approval_id: str) -> str | None:
     with connect() as conn:
         row = conn.execute("SELECT status FROM approvals WHERE id = ?", (approval_id,)).fetchone()
     return row["status"] if row else None
 
 
 async def wait_for_approval(approval_id: str, timeout: float = APPROVAL_TIMEOUT_SECONDS) -> str:
-    """Checks the row every second without blocking the event loop.
+    """Polls the row every second without blocking the event loop.
 
-    Returns "approved", "rejected" or "timeout", and records the matching
-    outcome on the event.
+    Returns "approved", "rejected" or "timeout". The caller records the outcome.
     """
     deadline = time.monotonic() + timeout
     while True:
-        status = _approval_status(approval_id)
-        if status in ("approved", "rejected") or time.monotonic() >= deadline:
-            result = status if status in ("approved", "rejected") else "timeout"
-            with connect() as conn:
-                row = conn.execute("SELECT event_id FROM approvals WHERE id = ?",
-                                   (approval_id,)).fetchone()
-            if row:
-                update_event_outcome(row["event_id"], result)
-            return result
+        status = approval_status(approval_id)
+        if status in ("approved", "rejected"):
+            return status
+        if time.monotonic() >= deadline:
+            return "timeout"
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
-
-
-init_db()
