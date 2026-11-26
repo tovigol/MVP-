@@ -2,12 +2,12 @@
 
 Flow:
   1. Every second, read pending approvals from guard.db and post a message
-     with Approve / Reject buttons to the approvals channel.
+     with Approve / Don't allow buttons to the approvals channel.
   2. A click updates the approvals row (shared.store.decide_approval) and
      replaces the buttons with the result.
   3. If the Gateway gives up after 60 seconds, the message is marked "Timed out".
 
-Run from the repo root:  python slack_bot.py
+Run from the repo root:  python slack_bot/bot.py
 Needs in .env: SLACK_BOT_TOKEN (xoxb-), SLACK_APP_TOKEN (xapp-), SLACK_APPROVAL_CHANNEL.
 """
 from __future__ import annotations
@@ -15,9 +15,16 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
+
+# Make the repo root importable (for `shared`) when run as `python slack_bot/bot.py`.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from dotenv import load_dotenv
 from slack_bolt import App
@@ -25,7 +32,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from shared import policy, store
 
-load_dotenv()
+load_dotenv(REPO_ROOT / ".env")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("slack_bot")
 
