@@ -118,26 +118,43 @@ def create_approval(event_id: int) -> str:
     return approval_id
 
 
+_APPROVAL_SELECT = """
+    SELECT a.id AS approval_id, a.event_id, a.status, a.decided_by, a.decided_at,
+           e.ts, e.agent, e.tool, e.category, e.args_json, e.amount_usd,
+           e.rule_id, e.reason, e.outcome
+    FROM approvals a JOIN events e ON e.id = a.event_id
+"""
+
+
 def pending_approvals() -> list[dict]:
-    """Pending approvals joined with their event (for the Slack bot)."""
+    """Approvals the Gateway is still waiting on (excludes ones that already timed out)."""
     with connect() as conn:
         rows = conn.execute(
-            """SELECT a.id AS approval_id, a.event_id, e.ts, e.agent, e.tool, e.category,
-                      e.args_json, e.amount_usd, e.rule_id, e.reason
-               FROM approvals a JOIN events e ON e.id = a.event_id
-               WHERE a.status = 'pending' ORDER BY e.id"""
+            _APPROVAL_SELECT + " WHERE a.status = 'pending' AND e.outcome IS NULL ORDER BY e.id"
         ).fetchall()
     return [dict(r) for r in rows]
 
 
+def get_approval(approval_id: str) -> dict | None:
+    """One approval joined with its event, or None."""
+    with connect() as conn:
+        row = conn.execute(_APPROVAL_SELECT + " WHERE a.id = ?", (approval_id,)).fetchone()
+    return dict(row) if row else None
+
+
 def decide_approval(approval_id: str, status: str, decided_by: str) -> bool:
-    """Called by the Slack bot on a button click. Only a pending row can be decided."""
+    """Called by the Slack bot on a button click.
+
+    Succeeds only while the row is pending and the Gateway is still waiting
+    (the event has no outcome yet, i.e. it has not timed out).
+    """
     if status not in ("approved", "rejected"):
         raise ValueError(f"invalid status: {status}")
     with connect() as conn:
         cur = conn.execute(
             """UPDATE approvals SET status = ?, decided_by = ?, decided_at = ?
-               WHERE id = ? AND status = 'pending'""",
+               WHERE id = ? AND status = 'pending'
+                 AND event_id IN (SELECT id FROM events WHERE outcome IS NULL)""",
             (status, decided_by, _now(), approval_id),
         )
         return cur.rowcount == 1
