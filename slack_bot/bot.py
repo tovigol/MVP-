@@ -5,7 +5,8 @@ Flow:
      with Approve / Don't allow buttons to the approvals channel.
   2. A click updates the approvals row (shared.store.decide_approval) and
      replaces the buttons with the result.
-  3. If the Gateway gives up after 60 seconds, the message is marked "Timed out".
+  3. If nobody answers within 60 seconds, the Gateway marks the approval
+     rejected with decided_by="timeout"; the message becomes "Expired".
 
 Run from the repo root:  python slack_bot/bot.py
 Needs in .env: SLACK_BOT_TOKEN (xoxb-), SLACK_APP_TOKEN (xapp-), SLACK_APPROVAL_CHANNEL.
@@ -30,7 +31,7 @@ from dotenv import load_dotenv
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-from shared import policy, store
+from shared import store
 
 load_dotenv(REPO_ROOT / ".env")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -50,14 +51,17 @@ HEADERS = {
     "destructive": "🔴 Your AI assistant wants to do something that can't be undone",
     "approved": "✅ You approved this",
     "rejected": "🚫 You blocked this",
-    "timeout": "⏱️ No answer in time - nothing was done",
+    "expired": "⏱️ Expired - nothing was done",
 }
 
-TOO_LATE_TEXT = {
-    "approved": "Someone already approved this request, so your click didn't change anything.",
-    "rejected": "Someone already blocked this request, so your click didn't change anything.",
-    "timeout": "Too late - the time to answer ran out, so nothing was done. Ask the assistant to try again if it's still needed.",
+ALREADY_HANDLED_TEXT = {
+    "approved": "Already handled - someone approved this request, so your click didn't change anything.",
+    "rejected": "Already handled - someone blocked this request, so your click didn't change anything.",
+    "expired": "Already handled - the time to answer ran out, so nothing was done. Ask the assistant to try again if it's still needed.",
 }
+
+DESTRUCTIVE_PREFIX = "[DESTRUCTIVE]"
+TIMEOUT_DECIDER = "timeout"  # decided_by value the Gateway writes when nobody answered
 
 # What the assistant wants to do, by tool category.
 ACTION_TEXT = {
@@ -79,11 +83,36 @@ def _esc(text) -> str:
     return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def _risk(tool: str) -> str:
+def _is_destructive(item: dict) -> bool:
+    return (item.get("reason") or "").startswith(DESTRUCTIVE_PREFIX)
+
+
+def _reason_text(item: dict) -> str:
+    """The reason without the [DESTRUCTIVE] tag (the red header already shows it)."""
+    reason = item.get("reason") or ""
+    if reason.startswith(DESTRUCTIVE_PREFIX):
+        reason = reason[len(DESTRUCTIVE_PREFIX):].strip()
+    return reason
+
+
+def _facts(item: dict) -> dict:
+    """The facts the Gateway checked, e.g. {"amount": 80.0} or {"recipients": [...]}."""
     try:
-        return policy.tool_entry(tool, policy.load_registry()).get("risk") or "write"
-    except Exception:
-        return "write"
+        facts = json.loads(item.get("facts_json") or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return facts if isinstance(facts, dict) else {}
+
+
+def final_state(row: dict) -> str | None:
+    """approved | rejected | expired once decided, None while still pending."""
+    if row.get("status") == "pending" and row.get("outcome") is None:
+        return None
+    if row.get("decided_by") == TIMEOUT_DECIDER or row.get("outcome") == "timeout":
+        return "expired"
+    if row.get("status") in ("approved", "rejected"):
+        return row["status"]
+    return "expired"  # Gateway finished without a decision (e.g. error)
 
 
 def _args_preview(args_json: str | None) -> str:
@@ -103,15 +132,6 @@ def _hm(iso: str | None) -> str:
         return datetime.now().strftime("%H:%M")
 
 
-def _recipients(item: dict) -> list[str]:
-    try:
-        entry = policy.tool_entry(item["tool"], policy.load_registry())
-        args = json.loads(item.get("args_json") or "{}")
-        return policy.collect_recipients(args, entry.get("recipient_fields", ["to", "cc", "bcc"]))
-    except Exception:
-        return []
-
-
 def summary_sentence(item: dict) -> str:
     """One plain sentence: what the assistant wants to do."""
     category = item.get("category")
@@ -119,10 +139,12 @@ def summary_sentence(item: dict) -> str:
     if action is None:
         return f"The assistant wants to use an action it hasn't used before (`{_esc(item['tool'])}`)."
     text = f"The assistant wants to *{action}*"
-    if category == "payment" and item.get("amount_usd") is not None:
-        text += f" of *${item['amount_usd']:,.2f}*"
+    facts = _facts(item)
+    amount = facts.get("amount")
+    if category == "payment" and isinstance(amount, (int, float)):
+        text += f" of *${amount:,.2f}*"
     if category == "email_send":
-        recipients = _recipients(item)
+        recipients = [str(r) for r in facts.get("recipients") or []]
         if recipients:
             text += " to " + ", ".join(f"*{_esc(r)}*" for r in recipients[:5])
             if len(recipients) > 5:
@@ -132,7 +154,7 @@ def summary_sentence(item: dict) -> str:
 
 def why_sentence(item: dict) -> str:
     """Why the owner is being asked, without internal terms."""
-    reason = item.get("reason") or ""
+    reason = _reason_text(item)
     if item.get("rule_id"):
         return f"Your rule says: _{_esc(reason)}_" if reason else "One of your rules says to check with you first."
     if reason.startswith("Tool not in registry"):
@@ -149,8 +171,8 @@ def _context(text: str) -> dict:
 
 
 def build_blocks(item: dict, state: str = "pending", actor: str | None = None) -> list[dict]:
-    """Block Kit layout for one approval. state: pending | approved | rejected | timeout."""
-    risky = state == "pending" and _risk(item["tool"]) == "destructive"
+    """Block Kit layout for one approval. state: pending | approved | rejected | expired."""
+    risky = state == "pending" and _is_destructive(item)
     header = HEADERS["destructive"] if risky else HEADERS[state]
 
     blocks: list[dict] = [
@@ -196,7 +218,7 @@ def build_blocks(item: dict, state: str = "pending", actor: str | None = None) -
     blocks.append(_context(
         f"Technical details · action `{_esc(item['tool'])}`"
         + (f" · agent {_esc(item['agent'])}" if item.get("agent") else "")
-        + f" · reference {item['approval_id'][:8]}"
+        + f" · reference {item['approval_id']}"
     ))
     blocks.append(_context(f"```{_args_preview(item.get('args_json'))}```"))
     return blocks
@@ -228,16 +250,15 @@ def create_app() -> App:
 
         if applied:
             state, actor = status, f"<@{user['id']}>"
-        elif row["status"] in ("approved", "rejected"):
-            state, actor = row["status"], None  # someone else clicked first
         else:
-            state, actor = "timeout", None
+            # decide_approval returned False: someone else clicked first, or it expired.
+            state, actor = final_state(row) or "expired", None
 
         client.chat_update(channel=channel, ts=ts, text=fallback_text(row, state),
                            blocks=build_blocks(row, state, actor))
         if not applied:
             client.chat_postEphemeral(channel=channel, user=user["id"],
-                                      text=TOO_LATE_TEXT[state])
+                                      text=ALREADY_HANDLED_TEXT[state])
         log.info("approval %s -> %s by %s (applied=%s)", approval_id, state, user_name, applied)
 
     @app.action("approve")
@@ -272,21 +293,20 @@ def _post(client, item: dict) -> None:
 
 
 def _sync_posted(client) -> None:
-    """Mark messages whose Gateway gave up as timed out; forget decided ones."""
+    """Update messages decided outside Slack (mainly: expired after 60s) and drop their buttons."""
     with posted_lock:
         ids = list(posted)
     for approval_id in ids:
         row = store.get_approval(approval_id)
-        if row is None or row["status"] != "pending":
-            with posted_lock:
-                posted.pop(approval_id, None)
-        elif row["outcome"] == "timeout":
-            with posted_lock:
-                entry = posted.pop(approval_id, None)
-            if entry:
-                client.chat_update(channel=entry[0], ts=entry[1], text=fallback_text(row, "timeout"),
-                                   blocks=build_blocks(row, "timeout"))
-                log.info("approval %s timed out", approval_id)
+        state = final_state(row) if row else None
+        if row is not None and state is None:
+            continue  # still waiting for an answer
+        with posted_lock:
+            entry = posted.pop(approval_id, None)
+        if entry and row is not None:
+            client.chat_update(channel=entry[0], ts=entry[1], text=fallback_text(row, state),
+                               blocks=build_blocks(row, state))
+            log.info("approval %s -> %s (outside Slack)", approval_id, state)
 
 
 def poll_loop(client) -> None:
