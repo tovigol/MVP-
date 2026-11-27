@@ -32,7 +32,7 @@ def test_token_required_when_set(monkeypatch):
     from fastmcp.exceptions import ToolError
 
     headers = {}
-    monkeypatch.setattr(gateway, "get_http_headers", lambda include_all=False: headers)
+    monkeypatch.setattr(gateway, "get_http_headers", lambda include_all=False: headers if include_all else {})
 
     async def passthrough(ctx):
         return "ok"
