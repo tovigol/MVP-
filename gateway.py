@@ -21,6 +21,8 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server import create_proxy
 from fastmcp.server.dependencies import get_http_headers
 from fastmcp.server.middleware import Middleware, MiddlewareContext
+from shared import store
+from shared.policy import Decision, load_registry, log_fields
 
 UPSTREAMS = {
     "mcpServers": {
@@ -54,8 +56,26 @@ class Guard(Middleware):
         return await call_next(context)
 
     async def on_call_tool(self, context: MiddlewareContext, call_next):
-        print(f"[guard] tool={context.message.name} args={context.message.arguments}", flush=True)
-        return await call_next(context)
+        tool = context.message.name
+        args = context.message.arguments or {}
+        agent = get_http_headers(include_all=True).get("x-agent") or "agent"
+        # Fail closed: nothing is forwarded unless the event row was written.
+        # No await in this block (Task 3 adds the daily total + decision here).
+        try:
+            category, amount_usd = log_fields(tool, args, load_registry())
+            decision = Decision("allow", None, "logging only", "")
+            event_id = store.log_event(tool, args, decision, category, amount_usd, agent)
+        except Exception as exc:
+            raise ToolError("Denied: guard could not record this call") from exc
+        try:
+            result = await call_next(context)
+        except BaseException:
+            store.update_outcome(event_id, "error")
+            raise
+        # A proxied upstream failure comes back as an error result, not a raise.
+        if getattr(result, "is_error", False):
+            store.update_outcome(event_id, "error")
+        return result
 
 
 def build_gateway(config, token: str | None = None) -> FastMCP:

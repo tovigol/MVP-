@@ -22,5 +22,11 @@ def send_email(
     return f"sent to {n} recipients"
 
 
+@mcp.tool
+def fail(amount: int = 0) -> str:
+    """Always raises (used to test error logging)."""
+    raise RuntimeError("upstream exploded")
+
+
 if __name__ == "__main__":
     mcp.run()

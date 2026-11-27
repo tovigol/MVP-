@@ -3,8 +3,12 @@ import asyncio
 import pytest
 from fastmcp import Client
 
+import json
+
 import gateway
+from dev import mock_email_server
 from dev.mock_email_server import mcp as mock_server
+from shared import policy, store
 
 
 def run(coro):
@@ -64,3 +68,58 @@ def test_refuses_public_bind_without_token():
         gateway.check_bind("0.0.0.0", "")
     gateway.check_bind("0.0.0.0", "tok")
     gateway.check_bind("127.0.0.1", None)
+
+
+@pytest.fixture
+def tmp_guard(tmp_path, monkeypatch):
+    registry = {
+        "email_send_email": {"category": "email_send", "risk": "write",
+                             "recipient_fields": ["to", "cc", "bcc"]},
+        "email_fail": {"category": "payment", "risk": "write",
+                       "amount_field": "amount", "amount_unit": "usd"},
+    }
+    reg = tmp_path / "registry.json"
+    reg.write_text(json.dumps(registry))
+    pol = tmp_path / "policy.json"
+    pol.write_text("{}")
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "guard.db")
+    monkeypatch.setattr(policy, "REGISTRY_PATH", reg)
+    monkeypatch.setattr(policy, "POLICY_PATH", pol)
+    mock_email_server.CALLS.clear()
+    yield
+    mock_email_server.CALLS.clear()
+
+
+def test_call_is_logged(tmp_guard):
+    run(_call(None)())
+    event = store.recent_events()[0]
+    assert event["tool"] == "email_send_email"
+    assert event["outcome"] == "forwarded"
+    assert event["category"] == "email_send"
+    assert event["agent"] == "agent"
+    assert len(mock_email_server.CALLS) == 1
+
+
+def test_upstream_error_logged_as_error(tmp_guard):
+    from fastmcp.exceptions import ToolError
+
+    async def go():
+        async with Client(gateway.build_gateway(mock_server)) as c:
+            await c.call_tool("email_fail", {"amount": 50})
+
+    with pytest.raises(ToolError):
+        run(go())
+    event = store.recent_events()[0]
+    assert event["tool"] == "email_fail"
+    assert event["outcome"] == "error"
+    assert event["amount_usd"] == 50
+    assert store.daily_payment_total() == 0
+
+
+def test_registry_failure_denies_without_forwarding(tmp_guard, monkeypatch):
+    from fastmcp.exceptions import ToolError
+
+    monkeypatch.setattr(policy, "REGISTRY_PATH", policy.REGISTRY_PATH.parent / "missing.json")
+    with pytest.raises(ToolError):
+        run(_call(None)())
+    assert mock_email_server.CALLS == []
