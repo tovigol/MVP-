@@ -30,7 +30,7 @@ DEFAULT_ILS_PER_USD = 3.7
 
 
 def ils(value: float) -> str:
-    return f"{value:,.0f} ₪"
+    return f"₪{value:,.0f}"
 
 
 def ils_per_usd() -> float:
@@ -57,47 +57,47 @@ def _rule(rule_id: str, category: str, effect: str, when: dict, explain: str) ->
 def baseline_rules(answers: dict) -> list[dict]:
     lim = limits()
     auto, daily = answers["pay_auto"], answers["pay_daily_limit"]
-    auto_txt = f"{ils(lim['auto_ils'])} (כ־${lim['auto_usd']:,})"
-    daily_txt = f"{ils(lim['daily_ils'])} (כ־${lim['daily_usd']:,})"
+    auto_txt = f"{ils(lim['auto_ils'])} (about ${lim['auto_usd']:,})"
+    daily_txt = f"{ils(lim['daily_ils'])} (about ${lim['daily_usd']:,})"
     rules: list[dict] = []
 
     # --- payments ---
     if auto:
         when = {"amount_usd_lte": lim["auto_usd"]}
-        text = f"תשלום עד {auto_txt} מתבצע אוטומטית"
+        text = f"Payments up to {auto_txt} go through automatically"
         if daily:
             when["daily_total_usd_lte"] = lim["daily_usd"]
-            text += f", כל עוד סך התשלומים היום לא עובר {daily_txt}"
+            text += f", as long as today's total stays under {daily_txt}"
         rules.append(_rule("pay-auto", "payment", "allow", when, text))
     if daily:
         rules.append(_rule("pay-ask", "payment", "ask", {"daily_total_usd_lte": lim["daily_usd"]},
-                           f"תשלום אחר, שלא חורג מ־{daily_txt} ליום, דורש את אישורך"))
+                           f"Other payments, within {daily_txt} a day, need your approval"))
         rules.append(_rule("pay-daily-block", "payment", "deny", {},
-                           f"תשלום שיחרוג מ־{daily_txt} ביום חסום"))
+                           f"Payments that would go over {daily_txt} a day are blocked"))
     else:
         rules.append(_rule("pay-ask", "payment", "ask", {},
-                           f"תשלום מעל {auto_txt} דורש את אישורך" if auto else "כל תשלום דורש את אישורך"))
+                           f"Payments over {auto_txt} need your approval" if auto else "Every payment needs your approval"))
 
     # --- email ---
     if answers["mail_internal"]:
         rules.append(_rule("email-internal", "email_send", "allow", {"all_recipients_in": COMPANY_DOMAINS},
-                           f"מיילים לכתובות במשרד ({', '.join(answers['company_domains'])}) נשלחים אוטומטית"))
+                           f"Emails to office addresses ({', '.join(answers['company_domains'])}) are sent automatically"))
     if answers["trusted_domains"]:
         rules.append(_rule("email-trusted", "email_send", "allow",
                            {"all_recipients_in": list(answers["trusted_domains"])},
-                           f"מיילים לדומיינים הקבועים ({', '.join(answers['trusted_domains'])}) נשלחים אוטומטית"))
+                           f"Emails to the fixed domains ({', '.join(answers['trusted_domains'])}) are sent automatically"))
     if answers["mail_unknown_asks"]:
-        rules.append(_rule("email-unknown", "email_send", "ask", {}, "מיילים לכתובות לא מוכרות דורשים את אישורך"))
+        rules.append(_rule("email-unknown", "email_send", "ask", {}, "Emails to unknown addresses need your approval"))
     else:
-        rules.append(_rule("email-unknown", "email_send", "deny", {}, "מיילים לכתובות לא מוכרות חסומים"))
+        rules.append(_rule("email-unknown", "email_send", "deny", {}, "Emails to unknown addresses are blocked"))
 
     # --- read / export ---
     if answers["read_allowed"]:
-        rules.append(_rule("read-all", "read", "allow", {}, "קריאת מידע (חשבוניות, פרטי לקוחות) מותרת"))
+        rules.append(_rule("read-all", "read", "allow", {}, "Reading information (invoices, customer details) is allowed"))
     else:
-        rules.append(_rule("read-ask", "read", "ask", {}, "קריאת מידע דורשת את אישורך"))
+        rules.append(_rule("read-ask", "read", "ask", {}, "Reading information needs your approval"))
     if answers["block_export"]:
-        rules.append(_rule("no-export", "bulk_export", "deny", {}, "ייצוא מלא של רשימת הלקוחות חסום"))
+        rules.append(_rule("no-export", "bulk_export", "deny", {}, "Exporting the whole customer list is blocked"))
     return rules
 
 
@@ -119,21 +119,21 @@ def build_policy(answers: dict, rules: list[dict]) -> dict:
 
 
 def limitation_notes(answers: dict) -> list[str]:
-    """What the owner asked for that the Guard cannot enforce (or enforces more strictly). Hebrew, for the checklist."""
+    """What the owner asked for that the Guard cannot enforce (or enforces more strictly). Plain English, for the checklist."""
     lim = limits()
     notes: list[str] = []
     if answers["pay_trusted_suppliers"]:
-        notes.append(f"שאלה 3: הספקים הקבועים ({', '.join(answers['supplier_names'])}) נשמרו, אבל ה־Guard עדיין "
-                     "לא מזהה למי משולם התשלום ולכן לא יכול להתיר תשלום לפי ספק. תשלומים נבדקים לפי הסכום בלבד.")
+        notes.append(f"Question 3: your regular suppliers ({', '.join(answers['supplier_names'])}) were saved, but the Guard "
+                     "can't yet tell who a payment goes to, so it can't allow payments by supplier. Payments are checked by amount only.")
     if answers["pay_auto"] and answers["pay_new_supplier_asks"]:
-        notes.append(f"שאלה 4: ה־Guard לא יכול להבדיל בין ספק חדש לספק קבוע, ולכן תשלום עד {ils(lim['auto_ils'])} "
-                     "יתבצע בלי אישור גם אם הוא לספק חדש. כדי לקבל אישור לכל ספק חדש, להשאיר את שאלה 1 לא מסומנת.")
+        notes.append(f"Question 4: the Guard can't tell a new supplier from a regular one, so a payment up to {ils(lim['auto_ils'])} "
+                     "goes through without approval even to a new supplier. To approve every new supplier, leave question 1 off.")
     if answers["mail_files"]:
-        notes.append("שאלה 8: ה־Guard לא בודק קבצים מצורפים, ולכן אי אפשר להתיר שליחת קובץ בלי אישור. "
-                     "מיילים ללקוחות נבדקים לפי הכתובת בלבד.")
+        notes.append("Question 8: the Guard doesn't check attachments, so sending a file can't be allowed without approval. "
+                     "Emails to customers are checked by address only.")
     if not answers["mail_unknown_asks"]:
-        notes.append("שאלה 7: מייל לכתובת לא מוכרת לא יישלח לאישור אלא ייחסם, כי ה־Guard אינו מתיר שליחה "
-                     "חופשית לכל כתובת.")
+        notes.append("Question 7: an email to an unknown address will be blocked rather than sent for approval, because the "
+                     "Guard never allows sending freely to any address.")
     if not answers["block_export"]:
-        notes.append("שאלה 9: ייצוא רשימת הלקוחות לא נחסם תמיד, אבל הוא ידרוש את אישורך בכל פעם.")
+        notes.append("Question 9: exporting the customer list isn't always blocked, but it will need your approval every time.")
     return notes + list(answers.get("warnings", []))

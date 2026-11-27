@@ -1,1 +1,1 @@
-"""AgentGuard onboarding (Person 3): owner questions -> policy.json, in Hebrew."""
+"""AgentGuard onboarding (Person 3): owner questions -> policy.json, in English."""

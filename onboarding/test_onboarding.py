@@ -19,13 +19,13 @@ from onboarding.questions import QUESTIONS, clean_answers, parse_addresses, pars
 from onboarding.translate import _user_prompt, save_policy, translate_answers
 from shared.policy import OPERATORS, evaluate
 
-# A typical owner: pays up to 2,000 ₪ alone with a daily cap, trusts the office domain and two fixed addresses.
-RAW = dict(pay_auto=True, pay_daily_limit=True, pay_trusted_suppliers=False, supplier_names="ספק הקמח",
+# A typical owner: pays up to ₪2,000 alone with a daily cap, trusts the office domain and two fixed addresses.
+RAW = dict(pay_auto=True, pay_daily_limit=True, pay_trusted_suppliers=False, supplier_names="Flour Co",
            pay_new_supplier_asks=False,
            mail_internal=True, internal_domain="office.co.il",
            mail_trusted=True, trusted_addresses="accountant@cpa-firm.co.il, office@taxes.gov.il",
            mail_unknown_asks=True, mail_files=False, block_export=True, block_delete=True, read_allowed=True)
-AUTO, DAILY = 540, 1891  # 2,000 ₪ and 7,000 ₪ at the default 3.7 ₪ per $, rounded down
+AUTO, DAILY = 540, 1891  # ₪2,000 and ₪7,000 at the default ₪3.7 per $, rounded down
 
 
 @pytest.fixture(autouse=True)
@@ -68,8 +68,10 @@ def test_questionnaire_matches_the_spec():
     assert [sum(q.section == s for q in QUESTIONS) for s in ("payments", "mail", "data")] == [4, 4, 3]
     # "if not answered" defaults: 1 no, 2 yes, 3 no, 4 yes, 5 no, 6 no, 7 yes, 8 no, 9 yes, 10 yes, 11 yes
     assert [q.default for q in QUESTIONS] == [False, True, False, True, False, False, True, False, True, True, True]
-    assert "2,000 ₪" in QUESTIONS[0].text and "7,000 ₪" in QUESTIONS[1].text
+    assert "₪2,000" in QUESTIONS[0].text and "₪7,000" in QUESTIONS[1].text
     assert [q.id for q in QUESTIONS if q.follow_up] == ["pay_trusted_suppliers", "mail_internal", "mail_trusted"]
+    icons = [q.icon for q in QUESTIONS]
+    assert "help" not in icons and len(set(icons)) == len(icons)  # every question has its own icon
 
 
 def test_an_untouched_form_gives_the_cautious_policy():
@@ -86,13 +88,13 @@ def test_an_untouched_form_gives_the_cautious_policy():
 
 
 @pytest.mark.parametrize("changes, fragment", [
-    ({"pay_trusted_suppliers": True, "supplier_names": " "}, "שאלה 3"),
-    ({"internal_domain": ""}, "שאלה 5"),
-    ({"internal_domain": "gmail.com"}, "חינמי"),
-    ({"internal_domain": "not a domain"}, "שאלה 5"),
-    ({"trusted_addresses": ""}, "שאלה 6"),
-    ({"trusted_addresses": "me@gmail.com, you@walla.co.il"}, "חינמי"),
-    ({"trusted_addresses": "@nothing"}, "שאלה 6"),
+    ({"pay_trusted_suppliers": True, "supplier_names": " "}, "Question 3"),
+    ({"internal_domain": ""}, "Question 5"),
+    ({"internal_domain": "gmail.com"}, "free email"),
+    ({"internal_domain": "not a domain"}, "Question 5"),
+    ({"trusted_addresses": ""}, "Question 6"),
+    ({"trusted_addresses": "me@gmail.com, you@walla.co.il"}, "free email"),
+    ({"trusted_addresses": "@nothing"}, "Question 6"),
 ])
 def test_follow_ups_are_required_and_checked(changes, fragment):
     _, problems = clean_answers({**RAW, **changes})
@@ -192,16 +194,16 @@ def test_no_policy_ever_allows_unknown_email_or_export_or_deletion():
 # --- what the Guard cannot enforce is told to the owner --------------------------------------
 
 def test_limitations_are_reported_for_questions_3_4_8_and_the_deviations():
-    notes = " | ".join(limitation_notes(_clean(pay_trusted_suppliers=True, supplier_names="ספק הקמח, חברת החשמל",
+    notes = " | ".join(limitation_notes(_clean(pay_trusted_suppliers=True, supplier_names="Flour Co, Electric Co",
                                                  pay_new_supplier_asks=True, mail_files=True,
                                                  mail_unknown_asks=False, block_export=False)))
-    for fragment in ("שאלה 3", "ספק הקמח", "שאלה 4", "שאלה 8", "שאלה 7", "שאלה 9"):
+    for fragment in ("Question 3", "Flour Co", "Question 4", "Question 8", "Question 7", "Question 9"):
         assert fragment in notes
 
 
 def test_no_note_about_new_suppliers_when_nothing_is_paid_automatically():
     notes = " | ".join(limitation_notes(_clean(pay_auto=False, pay_new_supplier_asks=True)))
-    assert "שאלה 4" not in notes
+    assert "Question 4" not in notes
     assert limitation_notes(_clean(pay_new_supplier_asks=False)) == []
 
 
@@ -367,12 +369,12 @@ def test_a_policy_that_misreads_the_answers_is_caught(answers, policy, mutate, f
 
 
 @pytest.mark.parametrize("rule_id, text, fragment", [
-    ("email-internal", "מיילים פנימיים נשלחים אוטומטית; המגבלה היומית היא 7,000 ₪", "must not mention amounts"),
-    ("no-export", "ייצוא חסום, עד $5", "must not mention amounts"),
-    ("pay-auto", "תשלום עד 3,500 ₪ מתבצע אוטומטית", "not about"),
-    ("pay-auto", "Payments are automatic", "must be in Hebrew"),
-    ("pay-auto", "תשלומים עד 540 $ מתבצעים אוטומטית", "write amounts in shekels"),
-    ("read-all", "קריאה מותרת " + "מאוד " * 60, "one short sentence"),
+    ("email-internal", "Office emails are sent automatically; the daily limit is ₪7,000", "must not mention amounts"),
+    ("no-export", "Export is blocked, up to $5", "must not mention amounts"),
+    ("pay-auto", "Payments up to ₪3,500 go through automatically", "not about"),
+    ("pay-auto", "תשלומים מתבצעים אוטומטית", "must be in English"),
+    ("pay-auto", "Payments up to $540 go through automatically", "write amounts in shekels"),
+    ("read-all", "Reading is allowed " + "very " * 60, "one short sentence"),
 ])
 def test_wrong_facts_in_an_explanation_are_caught(policy, rule_id, text, fragment):
     wrong = copy.deepcopy(policy)
@@ -381,19 +383,19 @@ def test_wrong_facts_in_an_explanation_are_caught(policy, rule_id, text, fragmen
 
 
 def test_a_rule_may_only_mention_the_amounts_it_is_about(answers, policy):
-    # Seen live: the explanation of the daily block also claimed payments above 2,000 ₪ are blocked (they only ask).
+    # Seen live: the explanation of the daily block also claimed payments above ₪2,000 are blocked (they only ask).
     wrong = copy.deepcopy(policy)
-    _rule(wrong, "pay-daily-block")["explain"] = "חוסם תשלום שחורג מ־7,000 ₪ ליום או מעל 2,000 ₪ לתשלום"
+    _rule(wrong, "pay-daily-block")["explain"] = "Blocks payments over ₪7,000 a day or over ₪2,000 per payment"
     assert any("not about" in p for p in explain_problems(wrong, answers))
     assert explain_problems(wrong) == []  # without the answers only the two limits are known
     right = copy.deepcopy(policy)
-    _rule(right, "pay-daily-block")["explain"] = "תשלום שחורג מ־7,000 ₪ ליום חסום"
+    _rule(right, "pay-daily-block")["explain"] = "Payments that would go over ₪7,000 a day are blocked"
     assert explain_problems(right, answers) == []
 
 
 def test_the_two_limits_may_be_named_in_either_currency(policy):
     right = copy.deepcopy(policy)
-    _rule(right, "pay-auto")["explain"] = "תשלום עד 2,000 ₪ (כ־$540) מתבצע אוטומטית, עד 7,000 ₪ ליום"
+    _rule(right, "pay-auto")["explain"] = "Payments up to ₪2,000 (about $540) go through automatically, up to ₪7,000 a day"
     assert explain_problems(right) == []
 
 
@@ -429,7 +431,7 @@ def _reply(answers, unsupported=(), mutate=None):
 def _bad_reply():
     """Rejected by the validator: an unbounded allow for payments."""
     return json.dumps({"rules": [{"id": "pay-all", "category": "payment", "effect": "allow", "when": {},
-                                  "explain": "הכול מותר"}], "unsupported": []}, ensure_ascii=False)
+                                  "explain": "Everything is allowed"}], "unsupported": []}, ensure_ascii=False)
 
 
 def _misread_reply(answers):
@@ -440,10 +442,10 @@ def _misread_reply(answers):
 
 
 def test_valid_first_answer_is_used(answers):
-    client = FakeClient(_reply(answers, unsupported=["הערה של המודל"]))
+    client = FakeClient(_reply(answers, unsupported=["A note from the model"]))
     result = translate_answers(answers, provider="anthropic", client=client)
     assert result.source == "llm" and result.provider == "anthropic"
-    assert "הערה של המודל" in result.unsupported
+    assert "A note from the model" in result.unsupported
     assert validate_policy(result.policy) == [] and semantic_problems(answers, result.policy) == []
     assert result.policy["default_by_risk"] == {"read": "allow", "write": "ask", "destructive": "deny"}
     assert len(client.calls) == 1
@@ -454,11 +456,11 @@ def test_valid_first_answer_is_used(answers):
 
 
 def test_only_structured_values_are_sent_to_the_model():
-    cleaned = _clean(pay_trusted_suppliers=True, supplier_names="ספק סודי בע״מ")
+    cleaned = _clean(pay_trusted_suppliers=True, supplier_names="Secret Supplier Ltd")
     prompt = _user_prompt(cleaned)
     assert '"auto_usd": 540' in prompt and '"daily_usd": 1891' in prompt
     assert "cpa-firm.co.il" in prompt                       # the domain is needed for the rule
-    assert "ספק סודי" not in prompt and "accountant@" not in prompt   # names and addresses are not
+    assert "Secret Supplier" not in prompt and "accountant@" not in prompt   # names and addresses are not
 
 
 def test_invalid_first_answer_is_retried_with_the_errors(answers):
@@ -484,7 +486,7 @@ def test_rules_that_misread_the_answers_are_retried_and_then_replaced(answers):
 
 def test_a_wrong_fact_in_an_explanation_is_retried(answers):
     def leak_limit(rules):
-        next(r for r in rules if r["id"] == "read-all")["explain"] = "קריאה מותרת; המגבלה היומית היא 7,000 ₪"
+        next(r for r in rules if r["id"] == "read-all")["explain"] = "Reading is allowed; the daily limit is ₪7,000"
     client = FakeClient(_reply(answers, mutate=leak_limit), _reply(answers))
     result = translate_answers(answers, provider="anthropic", client=client)
     assert result.source == "llm_retry"
@@ -511,9 +513,9 @@ def test_refusal_and_truncation_fall_back(answers, stop_reason):
 
 
 def test_fallback_still_tells_the_owner_what_cannot_be_enforced():
-    cleaned = _clean(pay_trusted_suppliers=True, supplier_names="ספק הקמח", pay_new_supplier_asks=True)
+    cleaned = _clean(pay_trusted_suppliers=True, supplier_names="Flour Co", pay_new_supplier_asks=True)
     result = translate_answers(cleaned, provider="anthropic", client=FakeClient(TypeError("authentication")))
-    assert result.source == "fallback" and any("שאלה 3" in n for n in result.unsupported)
+    assert result.source == "fallback" and any("Question 3" in n for n in result.unsupported)
 
 
 def test_fallback_reason_tells_why_the_model_did_not_run(answers):
@@ -538,7 +540,7 @@ def test_blank_anthropic_credentials_count_as_missing(monkeypatch):
 def test_save_policy_writes_utf8_and_refuses_invalid(tmp_path, policy):
     path = save_policy(policy, tmp_path / "policy.json")
     assert json.loads(path.read_text(encoding="utf-8")) == policy
-    assert "תשלום" in path.read_text(encoding="utf-8")  # not \u-escaped
+    assert "₪" in path.read_text(encoding="utf-8")  # not \u-escaped
     assert not (tmp_path / "policy.json.tmp").exists()
     with pytest.raises(ValueError):
         save_policy(_with_rules(policy), tmp_path / "bad.json")
