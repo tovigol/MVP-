@@ -1,3 +1,4 @@
 .env
 guard.db
 __pycache__/
+.pytest_cache/
