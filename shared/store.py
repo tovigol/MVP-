@@ -17,7 +17,9 @@ from contextlib import closing, contextmanager
 from datetime import date, datetime
 from pathlib import Path
 
-DB_PATH = Path(os.environ.get("GUARD_DB", Path(__file__).resolve().parent.parent / "guard.db"))
+REAL_DB_PATH = Path(__file__).resolve().parent.parent / "guard.db"
+# GUARD_DB is only for tests. Unset or empty -> always the real guard.db in the repo root.
+DB_PATH = Path(os.environ.get("GUARD_DB", "").strip() or REAL_DB_PATH)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
