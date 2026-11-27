@@ -382,3 +382,13 @@ def test_build_upstreams_skips_missing_server(tmp_path, capsys):
     servers = gateway.build_upstreams(ENV, root)["mcpServers"]
     assert set(servers) == {"email", "crm"}
     assert "WARNING" in capsys.readouterr().out
+
+
+def test_startup_check_works_when_token_set(monkeypatch):
+    # The listing must not go through the token-checking Guard: an in-process
+    # client sends no Authorization header.
+    monkeypatch.setenv("GUARD_TOKEN", "s3cret")
+    registry = {"email_send_email": {"category": "email"}}
+    missing = run(gateway.startup_check(mock_server, registry))
+    assert missing and "email_send_email" not in missing
+    assert "email_send_email" in run(gateway.startup_check(mock_server, {}))

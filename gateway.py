@@ -65,6 +65,16 @@ def startup_report(tool_names: list[str], registry: dict) -> list[str]:
     return [t for t in tool_names if t not in registry]
 
 
+async def startup_check(config, registry: dict) -> list[str]:
+    """List the upstream tools and return those missing from the registry.
+
+    Uses a tokenless gateway (no Guard token): an in-process client sends no
+    Authorization header, so a token-checking gateway would reject the listing.
+    """
+    async with Client(build_gateway(config, None)) as c:
+        return startup_report([t.name for t in await c.list_tools()], registry)
+
+
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
 
@@ -181,17 +191,12 @@ def main() -> None:
     port = int(os.environ.get("GUARD_PORT", "8080"))
     token = os.environ.get("GUARD_TOKEN") or None
     check_bind(host, token)
-    gw = build_gateway(UPSTREAMS, token)
-
-    async def list_tools() -> list[str]:
-        async with Client(gw) as c:
-            return [t.name for t in await c.list_tools()]
-
     try:
-        for name in startup_report(asyncio.run(list_tools()), load_registry()):
+        for name in asyncio.run(startup_check(UPSTREAMS, load_registry())):
             print(f"WARNING: tool {name} is not in the registry (it will be denied)", flush=True)
     except Exception as exc:
-        print(f"WARNING: startup check failed: {exc}", flush=True)
+        print(f"WARNING: registry check SKIPPED, no tools were checked: {exc}", flush=True)
+    gw = build_gateway(UPSTREAMS, token)
     gw.run(transport="http", host=host, port=port, path="/mcp")
 
 
