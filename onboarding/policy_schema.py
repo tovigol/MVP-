@@ -6,6 +6,7 @@ before the file is written. Constants come from shared/policy.py so the two cann
 """
 from __future__ import annotations
 
+import copy
 import math
 import re
 
@@ -56,6 +57,28 @@ RULES_JSON_SCHEMA = {
 }
 
 
+def to_strict_schema(schema: dict) -> dict:
+    """OpenAI/Azure strict structured outputs: every property is required, optional ones become nullable.
+
+    normalize_rules() drops the resulting nulls, so the rest of the code sees the original shape.
+    """
+    def fix(node):
+        if node.get("type") == "object":
+            required = set(node.get("required", []))
+            for name, child in node.get("properties", {}).items():
+                fix(child)
+                if name not in required:
+                    child["type"] = [child["type"], "null"]
+            node["required"] = list(node.get("properties", {}))
+            node["additionalProperties"] = False
+        elif node.get("type") == "array":
+            fix(node["items"])
+
+    strict = copy.deepcopy(schema)
+    fix(strict)
+    return strict
+
+
 def _is_positive_number(value) -> bool:
     return (isinstance(value, (int, float)) and not isinstance(value, bool)
             and math.isfinite(value) and value > 0)
@@ -71,7 +94,7 @@ def normalize_rules(rules: list) -> list:
     out = []
     for rule in rules:
         rule = dict(rule)
-        when = dict(rule.get("when") or {})
+        when = {k: v for k, v in dict(rule.get("when") or {}).items() if v is not None}  # strict mode sends nulls
         for op in RECIPIENT_OPERATORS:
             value = when.get(op)
             if isinstance(value, list):

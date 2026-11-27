@@ -1,75 +1,109 @@
-"""The onboarding questions (Hebrew UI) and cleaning of the owner's answers.
+"""The onboarding questionnaire (Hebrew UI): 11 yes/no questions in three parts, and cleaning of the answers.
 
-Numeric answers are structured on purpose: amounts and domains are the parts of a policy
-where a typo is dangerous, so they are parsed by code and only handed to Claude as data.
-The free-text answer is where Claude's translation adds value.
+Every question is a checkbox. Its starting state is the "if not answered" default of the questionnaire, which is
+always the cautious answer, so a form left untouched produces a cautious policy.
+
+Three questions ask for a follow-up when ticked (3: supplier names, 5: the office's mail domain, 6: the fixed
+addresses). Question 5's domain is not in the spec text: without it "mail inside the office" cannot be matched.
 """
 from __future__ import annotations
 
-import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
-# Value of the "forbidden" multiselect -> Hebrew label.
-FORBIDDEN_OPTIONS = {
-    "bulk_export": "ייצוא מלא של רשימת הלקוחות או של נתונים אחרים",
-    "external_email": "שליחת מייל לכתובות מחוץ לעסק (בלי לשאול אותי בכלל)",
-    "all_payments": "כל תשלום, בכל סכום",
-}
+AUTO_PAY_LIMIT_ILS = 2000   # question 1
+DAILY_LIMIT_ILS = 7000      # question 2
+
+# Allowing a free-mail domain would allow every address at that provider, so such domains are never
+# turned into an allow rule (the engine compares whole domains, not single addresses).
+FREE_MAIL_DOMAINS = frozenset({
+    "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com", "msn.com", "yahoo.com",
+    "ymail.com", "icloud.com", "me.com", "aol.com", "proton.me", "protonmail.com", "gmx.com", "mail.com",
+    "yandex.com", "walla.co.il", "walla.com", "012.net.il", "013.net", "013net.net", "netvision.net.il",
+    "bezeqint.net", "zahav.net.il",
+})
 
 _DOMAIN_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
 
 
 @dataclass(frozen=True)
-class Question:
+class FollowUp:
     id: str
     label: str
-    kind: Literal["text", "number", "domains", "multiselect", "longtext"]
-    help: str = ""
-    default: object = ""
-    placeholder: str = ""
-    options: dict = field(default_factory=dict)  # multiselect only: value -> Hebrew label
+    placeholder: str
 
+
+@dataclass(frozen=True)
+class Question:
+    id: str
+    number: int
+    section: str
+    text: str
+    default: bool        # the state when the owner does not answer
+    default_note: str    # what that default means, in Hebrew
+    follow_up: FollowUp | None = None
+
+
+SECTIONS = {"payments": "💰 חלק א: תשלומים", "mail": "📧 חלק ב: מיילים", "data": "📂 חלק ג: מידע"}
 
 QUESTIONS: list[Question] = [
-    Question("business_name", "איך קוראים לעסק שלך?", "text",
-             default="", placeholder="למשל: המאפייה של יוסי"),
-    Question("company_domains", "מה הדומיין של כתובות המייל של העסק?", "domains",
-             help="מיילים לכתובות בדומיין הזה נחשבים פנימיים. אפשר כמה דומיינים, מופרדים בפסיק.",
-             placeholder="yossibakery.com"),
-    Question("auto_pay_limit_usd", "עד איזה סכום (בדולרים) הסוכן רשאי לשלם לבד, בלי לשאול אותך?", "number",
-             help="תשלום עד הסכום הזה יתבצע אוטומטית.", default=100.0),
-    Question("daily_pay_limit_usd", "מה הסכום המצטבר המקסימלי ליום שהסוכן רשאי לשלם לבד?", "number",
-             help="מונע פיצול של תשלום גדול לכמה תשלומים קטנים. מעבר לסכום הזה הסוכן יבקש אישור.",
-             default=300.0),
-    Question("max_pay_limit_usd", "מעל איזה סכום תשלום חסום לגמרי?", "number",
-             help="בין הסכום האוטומטי לסכום הזה תקבל בקשת אישור. מעליו התשלום יידחה.",
-             default=1000.0),
-    Question("trusted_domains", "לאילו ספקים או לקוחות קבועים מותר לשלוח מייל בלי לשאול אותך?", "domains",
-             help="דומיינים של גורמים חיצוניים שאתה סומך עליהם. אפשר להשאיר ריק.",
-             placeholder="flour-supplier.com"),
-    Question("forbidden", "מה אסור לסוכן לעשות בשום מקרה?", "multiselect",
-             help="כל מה שלא סימנת ולא מוגדר במפורש יגיע אליך לאישור.",
-             default=["bulk_export"], options=FORBIDDEN_OPTIONS),
-    Question("free_text", "יש עוד משהו שחשוב לך? כתוב במשפט חופשי.", "longtext",
-             help="Claude יתרגם את זה לחוקים. מה שאי אפשר לבטא כחוק יסומן לך בנפרד.",
-             placeholder="למשל: אל תשלם לאף אחד יותר ממאה דולר בלי לשאול אותי."),
+    Question("pay_auto", 1, "payments",
+             f"האם הסוכן יכול לשלם בלי לשאול אותך, עד {AUTO_PAY_LIMIT_ILS:,} ₪?",
+             False, "❌ לא, כל תשלום מגיע לאישור"),
+    Question("pay_daily_limit", 2, "payments",
+             f"האם להגביל את סך התשלומים ביום ל-{DAILY_LIMIT_ILS:,} ₪?",
+             True, "✅ כן, יש הגבלה"),
+    Question("pay_trusted_suppliers", 3, "payments",
+             "האם הסוכן יכול לשלם לספקים הקבועים שלך בלי לשאול?",
+             False, "❌ לא",
+             FollowUp("supplier_names", "שמות הספקים הקבועים", "למשל: חברת החשמל, ספק הקמח")),
+    Question("pay_new_supplier_asks", 4, "payments",
+             "האם תשלום לספק חדש יגיע אלייך לאישור, גם בסכום קטן?",
+             True, "✅ כן, תמיד לאישור"),
+    Question("mail_internal", 5, "mail",
+             "האם הסוכן יכול לשלוח מייל לתוך המשרד שלך בלי לשאול?",
+             False, "❌ לא",
+             FollowUp("internal_domain", "הדומיין של המשרד", "office.co.il")),
+    Question("mail_trusted", 6, "mail",
+             "האם הסוכן יכול לשלוח מייל לכתובות קבועות, כמו רשות המסים ורואה החשבון, בלי לשאול?",
+             False, "❌ לא",
+             FollowUp("trusted_addresses", "הכתובות הקבועות", "accountant@cpa-firm.co.il, office@taxes.gov.il")),
+    Question("mail_unknown_asks", 7, "mail",
+             "האם מייל לכתובת לא מוכרת יגיע אלייך לאישור?",
+             True, "✅ כן"),
+    Question("mail_files", 8, "mail",
+             "האם הסוכן יכול לשלוח ללקוח קובץ, כמו דוח או תלוש, בלי שתראי קודם?",
+             False, "❌ לא"),
+    Question("block_export", 9, "data",
+             "האם לחסום תמיד ייצוא של כל רשימת הלקוחות?",
+             True, "✅ כן, חסום"),
+    Question("block_delete", 10, "data",
+             "האם לחסום תמיד מחיקה של חשבוניות או מסמכים?",
+             True, "✅ כן, חסום"),
+    Question("read_allowed", 11, "data",
+             "האם הסוכן יכול לקרוא מידע, כמו חשבוניות ופרטי לקוחות, בלי לשאול?",
+             True, "✅ כן, קריאה בלבד מותרת"),
 ]
 
+QUESTION_BY_ID = {q.id: q for q in QUESTIONS}
 
-def parse_domains(text: str) -> tuple[list[str], list[str]]:
-    """Splits free text into (valid lowercase domains, invalid tokens). Accepts 'a@b.com' and 'https://b.com'."""
+
+def _tokens(text) -> list[str]:
+    return [t.strip() for t in re.split(r"[,\s;]+", str(text or "")) if t.strip()]
+
+
+def _domain_of(token: str) -> str:
+    domain = re.sub(r"^[a-z]+://", "", token.lower()).rpartition("@")[2].strip("/ .")
+    return domain[4:] if domain.startswith("www.") else domain
+
+
+def parse_domains(text) -> tuple[list[str], list[str]]:
+    """(valid lowercase domains, invalid tokens). Accepts 'a@b.com' and 'https://b.com' too."""
     valid: list[str] = []
     invalid: list[str] = []
-    for token in re.split(r"[,\s;]+", text or ""):
-        token = token.strip()
-        if not token:
-            continue
-        domain = re.sub(r"^[a-z]+://", "", token.lower())
-        domain = domain.rpartition("@")[2].strip("/ .")
-        if domain.startswith("www."):
-            domain = domain[4:]
+    for token in _tokens(text):
+        domain = _domain_of(token)
         if _DOMAIN_RE.match(domain):
             if domain not in valid:
                 valid.append(domain)
@@ -78,48 +112,71 @@ def parse_domains(text: str) -> tuple[list[str], list[str]]:
     return valid, invalid
 
 
-def _positive_number(value) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) and number > 0 else None
+def parse_addresses(text) -> tuple[list[tuple[str, str]], list[str]]:
+    """([(what the owner typed, its domain)], invalid tokens). A bare domain is accepted as well as user@domain."""
+    entries: list[tuple[str, str]] = []
+    invalid: list[str] = []
+    for token in _tokens(text):
+        local, at, _ = token.rpartition("@")
+        domain = _domain_of(token)
+        if _DOMAIN_RE.match(domain) and (not at or local):
+            entry = (token.lower(), domain)
+            if entry not in entries:
+                entries.append(entry)
+        else:
+            invalid.append(token)
+    return entries, invalid
 
 
 def clean_answers(raw: dict) -> tuple[dict, list[str]]:
-    """Returns (clean answers, problems). `problems` are Hebrew messages for the owner; empty = OK."""
+    """Returns (clean answers, problems). `problems` are Hebrew messages for the owner; empty = OK.
+
+    `raw` maps each question id to a bool (missing = the question's default) and each follow-up id to text.
+    Cautious notes about what could not be taken literally go to answers["warnings"].
+    """
     problems: list[str] = []
-    answers: dict = {}
+    warnings: list[str] = []
+    answers: dict = {q.id: bool(raw.get(q.id, q.default)) for q in QUESTIONS}
 
-    answers["business_name"] = str(raw.get("business_name") or "").strip()
-    if not answers["business_name"]:
-        problems.append("נא למלא את שם העסק.")
+    # 3: supplier names (kept for the record; the engine cannot match a payee, see baseline.limitation_notes)
+    names = [n.strip() for n in re.split(r"[,\n;]+", str(raw.get("supplier_names") or "")) if n.strip()]
+    answers["supplier_names"] = names if answers["pay_trusted_suppliers"] else []
+    if answers["pay_trusted_suppliers"] and not names:
+        problems.append("שאלה 3: נא להקליד את שמות הספקים הקבועים.")
 
-    for key, label, required in (("company_domains", "דומיין המייל של העסק", True),
-                                 ("trusted_domains", "הספקים הקבועים", False)):
-        domains, invalid = parse_domains(raw.get(key) or "")
-        answers[key] = domains
+    # 5: the office's own mail domain
+    answers["company_domains"] = []
+    if answers["mail_internal"]:
+        domains, invalid = parse_domains(raw.get("internal_domain"))
+        free = [d for d in domains if d in FREE_MAIL_DOMAINS]
+        domains = [d for d in domains if d not in FREE_MAIL_DOMAINS]
         if invalid:
-            problems.append(f"{label}: לא הצלחתי לקרוא את {', '.join(invalid)}. כתוב דומיין כמו yossibakery.com.")
-        if required and not domains and not invalid:
-            problems.append(f"נא למלא את {label}.")
+            problems.append(f"שאלה 5: לא הצלחתי לקרוא את {', '.join(invalid)}. כתוב דומיין כמו office.co.il.")
+        elif free:
+            problems.append(f"שאלה 5: {', '.join(free)} הוא שירות מייל חינמי. היתר לדומיין כזה היה מתיר מייל לכל "
+                            "הכתובות בו. יש להקליד את הדומיין של המשרד עצמו.")
+        elif not domains:
+            problems.append("שאלה 5: נא להקליד את הדומיין של המשרד, למשל office.co.il.")
+        answers["company_domains"] = domains
 
-    for key, label in (("auto_pay_limit_usd", "הסכום האוטומטי"),
-                       ("daily_pay_limit_usd", "התקרה היומית"),
-                       ("max_pay_limit_usd", "סכום החסימה")):
-        number = _positive_number(raw.get(key))
-        if number is None:
-            problems.append(f"{label}: נא להזין מספר גדול מאפס.")
-        answers[key] = number
+    # 6: fixed addresses -> allowed by domain
+    answers["trusted_addresses"], answers["trusted_domains"] = [], []
+    if answers["mail_trusted"]:
+        entries, invalid = parse_addresses(raw.get("trusted_addresses"))
+        usable = [(a, d) for a, d in entries if d not in FREE_MAIL_DOMAINS]
+        excluded = [a for a, d in entries if d in FREE_MAIL_DOMAINS]
+        if invalid:
+            problems.append(f"שאלה 6: לא הצלחתי לקרוא את {', '.join(invalid)}. כתוב כתובת כמו accountant@cpa-firm.co.il.")
+        elif not entries:
+            problems.append("שאלה 6: נא להקליד את הכתובות הקבועות.")
+        elif not usable:
+            problems.append("שאלה 6: כל הכתובות הן בשירות מייל חינמי (למשל gmail.com), ולא ניתן להתיר אותן "
+                            "בלי להתיר את כל הכתובות בשירות. מיילים אליהן ימשיכו להגיע לאישור.")
+        elif excluded:
+            warnings.append(f"הכתובות {', '.join(excluded)} לא הותרו: הן בשירות מייל חינמי, וההיתר היה חל על "
+                            "כל הכתובות בשירות. הן יטופלו כמו כל כתובת לא מוכרת (שאלה 7).")
+        answers["trusted_addresses"] = [a for a, _ in usable]
+        answers["trusted_domains"] = list(dict.fromkeys(d for _, d in usable))
 
-    auto, daily, ceiling = (answers["auto_pay_limit_usd"], answers["daily_pay_limit_usd"],
-                            answers["max_pay_limit_usd"])
-    if auto and daily and daily < auto:
-        problems.append("התקרה היומית צריכה להיות לפחות כמו הסכום האוטומטי לתשלום בודד.")
-    if auto and ceiling and ceiling < auto:
-        problems.append("סכום החסימה צריך להיות לפחות כמו הסכום האוטומטי.")
-
-    forbidden = [v for v in (raw.get("forbidden") or []) if v in FORBIDDEN_OPTIONS]
-    answers["forbidden"] = forbidden
-    answers["free_text"] = str(raw.get("free_text") or "").strip()
+    answers["warnings"] = warnings
     return answers, problems
