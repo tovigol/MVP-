@@ -2,11 +2,11 @@
 
     streamlit run app.py --server.port 8000
 
-Step 1: a checklist of eleven yes/no questions, each with its own icon -> the LLM (Azure OpenAI,
+Step 1: eleven yes/no questions (toggles), each with its own icon -> the LLM (Azure OpenAI,
         see llm.py) turns the answers into rules.
 Step 2: checklist in plain English -> "approve and save" writes shared/policy.json and opens the dashboard.
 Same look as the dashboard (shared/theme.py): white cards, greeting header, status pills, KPI cards.
-TODO (README section 9): editable numbers in the checklist; the "Activate" screen.
+The review step also shows the "Connect your agent" card (the one URL to paste) before saving.
 """
 import re
 import sys
@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # so `shared` a
 
 import streamlit as st
 
-from dashboard.data import CRITICAL, GOOD, WARNING, tint
+from dashboard.data import ACCENT, CRITICAL, GOOD, WARNING, tint
 from onboarding.baseline import ils_per_usd
 from onboarding.llm import active_provider, credentials_problems, provider_label
 from onboarding.policy_schema import CATEGORIES
@@ -49,6 +49,14 @@ FALLBACK_TEXT = {
 }
 STEPS = ["Questions about your business", "Review the rules", "Dashboard"]
 ICON_MD = re.compile(r"^:material/(\w+):\s*")
+# A question's default note: ':green[:material/check:] Yes, blocked' -> tone, icon, text.
+NOTE_MD = re.compile(r"^:(red|green)\[:material/(\w+):\]\s*(.*)$")
+# Each part of the questionnaire has its own color, used for its icon tiles and its "on" rows.
+SECTION_COLORS = {"payments": BRAND, "mail": ACCENT, "data": "#7a5af8"}
+# A question that is turned on gets its part's color.
+ON_CSS = "".join(f'.st-key-card_{key} [class*="st-key-q_"]:has(input[role="switch"]:checked) '
+                 f'{{ background: {tint(color, .06)}; border-color: {tint(color, .35)}; }}\n'
+                 for key, color in SECTION_COLORS.items())
 
 PAGE_CSS = f"""
 <style>
@@ -57,6 +65,36 @@ PAGE_CSS = f"""
 .ag-badge {{ margin-left: 0; display: inline-flex; align-items: center; gap: 4px; }}
 .ag-kpis-3 {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
 .ag-rule {{ font-size: 14px; color: #344054; margin-top: 6px; line-height: 1.55; }}
+
+/* Questions: one card per part, like the dashboard's KPI cards (tinted icon tile + title). */
+.ag-sec-head {{ display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }}
+.ag-sec-head .ag-icon {{ width: 40px; height: 40px; border-radius: 12px; }}
+.ag-sec-head .ag-card-title {{ font-size: 17px; }}
+.ag-sec-head .ag-card-sub {{ margin-bottom: 0; }}
+
+/* One question = one soft tile: icon, question, default badge, toggle on the right. */
+[class*="st-key-q_"] {{ border: 1px solid #eef0f4; border-radius: 12px; padding: 12px 12px 12px 14px;
+                         background: #fcfcfd; transition: background .15s, border-color .15s; }}
+.ag-q {{ display: flex; gap: 12px; align-items: flex-start; }}
+.ag-q .ag-icon {{ flex: none; width: 32px; height: 32px; border-radius: 9px; }}
+.ag-q .ag-icon .ag-mi {{ font-size: 18px; }}
+.ag-q-title {{ font-size: 14.5px; font-weight: 600; color: #101828; line-height: 1.45; }}
+.ag-q-num {{ color: #98a2b3; font-weight: 600; margin-right: 2px; }}
+.ag-q-def {{ font-size: 12.5px; color: #667085; margin-top: 6px; line-height: 1.5; }}
+.ag-q-def .ag-tag {{ display: inline-block; padding: 1px 7px; border-radius: 6px; font-weight: 600; }}
+/* Streamlit gives markdown a -16px bottom margin and the row overflow:auto; together they clipped the tag. */
+[class*="st-key-q_"] [data-testid="stMarkdownContainer"]:has(.ag-q) {{ margin-bottom: 0 !important; }}
+[class*="st-key-q_"] [data-testid="stHorizontalBlock"] {{ overflow: visible; }}
+.ag-q-def .ag-mi {{ font-size: 14px; vertical-align: -0.15em; margin-right: 2px; }}
+/* Follow-up fields line up with the question text (icon tile 32px + gap 12px). */
+[class*="st-key-q_"] .stNumberInput, [class*="st-key-q_"] .stTextInput {{ padding-left: 44px; }}
+
+/* Cards in one row share one height, like the dashboard. */
+/* Column > block > layout wrapper > card: let the wrapper and the card fill the column. */
+[data-testid="stColumn"] [data-testid="stLayoutWrapper"]:has(> [class*="st-key-card_"]) {{
+  flex: 1 1 auto; display: flex; flex-direction: column; }}
+[data-testid="stColumn"] [data-testid="stLayoutWrapper"] > [class*="st-key-card_"] {{ flex: 1 1 auto; }}
+{ON_CSS}
 
 /* Steps in the sidebar. */
 .ag-step {{ display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 10px;
@@ -112,6 +150,46 @@ def sidebar(step: int) -> None:
         st.caption("The rules are saved in shared/policy.json, and the Gateway checks every agent action against them.")
 
 
+def default_html(note: str) -> str:
+    """'If you don't answer' + the default as a small green (yes) or red (no) tag."""
+    m = NOTE_MD.match(note)
+    if not m:
+        return f'<div class="ag-q-def">If you don\'t answer: {h(note)}</div>'
+    tone, icon, text = m.groups()
+    bg, fg = (tint(GOOD, .12), "#067a18") if tone == "green" else (tint(CRITICAL, .10), "#b42318")
+    return (f'<div class="ag-q-def">If you don\'t answer: <span class="ag-tag" style="background:{bg};color:{fg}">'
+            f'{mi(icon)}{h(text)}</span></div>')
+
+
+def section_card(section_key: str, section_title: str, defaults: dict, raw: dict) -> None:
+    """One part of the questionnaire: a header like the dashboard's KPI cards, then one tile per question."""
+    icon, title = split_icon(section_title)
+    color = SECTION_COLORS.get(section_key, BRAND)
+    questions = [q for q in QUESTIONS if q.section == section_key]
+    on = sum(bool(st.session_state.get(q.id, defaults.get(q.id, q.default))) for q in questions)
+    st.markdown(f'<div class="ag-sec-head"><span class="ag-icon" style="background:{tint(color, .14)}">'
+                f'{mi(icon, color)}</span><div><div class="ag-card-title">{h(title)}</div>'
+                f'<div class="ag-card-sub">{len(questions)} questions · {on} turned on</div></div></div>',
+                unsafe_allow_html=True)
+    for q in questions:
+        with st.container(key=f"q_{q.id}", gap="small"):
+            with st.container(horizontal=True, vertical_alignment="top", gap="small", wrap=False):
+                st.markdown(f'<div class="ag-q"><span class="ag-icon" style="background:{tint(color, .12)}">'
+                            f'{mi(q.icon, color)}</span><div><div class="ag-q-title"><span class="ag-q-num">'
+                            f'{q.number}.</span> {h(q.text)}</div>{default_html(q.default_note)}</div></div>',
+                            unsafe_allow_html=True, width="stretch")
+                raw[q.id] = st.toggle(q.text, value=defaults.get(q.id, q.default), key=q.id,
+                                      label_visibility="collapsed", width="content")
+            if q.follow_up and raw[q.id]:
+                f = q.follow_up
+                if f.kind == "amount":  # questions 1 and 2: the owner chooses the amount
+                    raw[f.id] = st.number_input(f.label, min_value=1, step=100, format="%d",
+                                                value=int(defaults.get(f.id) or f.default), key=f.id)
+                else:
+                    raw[f.id] = st.text_input(f.label, value=defaults.get(f.id, ""),
+                                              placeholder=f.placeholder, key=f.id)
+
+
 def questions_step() -> None:
     sidebar(1)
     provider = active_provider()
@@ -131,25 +209,12 @@ def questions_step() -> None:
     defaults = st.session_state.get("raw_answers", {})
     raw: dict = {}
     for column, (section_key, section_title) in zip(st.columns(len(SECTIONS), gap="medium"), SECTIONS.items()):
-        icon, title = split_icon(section_title)
-        section_questions = [q for q in QUESTIONS if q.section == section_key]
-        with column, st.container(key=f"card_{section_key}"):
-            st.markdown(f'<div class="ag-card-title">{mi(icon, BRAND)}{h(title)}</div>'
-                        f'<div class="ag-card-sub">{len(section_questions)} questions</div>', unsafe_allow_html=True)
-            for q in section_questions:
-                raw[q.id] = st.checkbox(f":orange[:material/{q.icon}:] {q.number}. {q.text}",
-                                        value=defaults.get(q.id, q.default), key=q.id)
-                st.caption(f"If you don't answer: {q.default_note}")
-                if q.follow_up and raw[q.id]:
-                    f = q.follow_up
-                    if f.kind == "amount":  # questions 1 and 2: the owner chooses the amount
-                        raw[f.id] = st.number_input(f.label, min_value=1, step=100, format="%d",
-                                                    value=int(defaults.get(f.id) or f.default), key=f.id)
-                    else:
-                        raw[f.id] = st.text_input(f.label, value=defaults.get(f.id, ""),
-                                                  placeholder=f.placeholder, key=f.id)
+        with column, st.container(key=f"card_{section_key}", gap="small"):
+            section_card(section_key, section_title, defaults, raw)
 
-    if not st.button("Create my rules", type="primary", icon=":material/auto_awesome:"):
+    actions = st.container(horizontal=True, horizontal_alignment="distribute", vertical_alignment="center")
+    actions.caption("Not sure? Leave the default. It is always the cautious choice, and you can change it later.")
+    if not actions.button("Create my rules", type="primary", icon=":material/auto_awesome:"):
         return
     st.session_state.raw_answers = raw
     answers, problems = clean_answers(raw)
@@ -227,11 +292,26 @@ def review_step() -> None:
     with st.expander("The JSON that will be saved (for developers)"):
         st.json(policy)
 
-    back, save = st.columns(2)
-    if back.button("Back to editing", icon=":material/edit:"):
+    # "Activate" (README section 2): show the one URL the agent connects to. Display only.
+    with st.container(key="card_connect"):
+        st.markdown(f'<div class="ag-card-title">{mi("link", BRAND)}Connect your agent</div>'
+                    '<div class="ag-card-sub">Paste this one URL into your agent. From then on every action goes '
+                    "through the Guard, and the agent never holds your Stripe, email or Slack keys.</div>",
+                    unsafe_allow_html=True)
+        st.code("http://localhost:8080/mcp", language="text")
+        azure, claude, claude_code, n8n = st.tabs(["Azure OpenAI agent", "Claude", "Claude Code", "n8n"])
+        azure.success("Your Azure OpenAI agent is already connected to this URL.", icon=":material/check_circle:")
+        azure.code('GATEWAY_URL="http://localhost:8080/mcp"', language="bash")
+        claude.write("Settings → Connectors → Add custom connector → paste the URL.")
+        claude_code.code("claude mcp add --transport http agentguard http://localhost:8080/mcp", language="bash")
+        n8n.write("Add an **MCP Client Tool** node to your AI Agent → Endpoint: paste the URL → "
+                  "Transport: HTTP Streamable.")
+
+    actions = st.container(horizontal=True, horizontal_alignment="distribute")  # Back on the left, Save on the right
+    if actions.button("Back to editing", icon=":material/edit:"):
         st.session_state.step = "questions"
         st.rerun()
-    if save.button("Approve and save", type="primary", icon=":material/save:"):
+    if actions.button("Approve and save", type="primary", icon=":material/save:"):
         save_policy(policy)
         st.session_state.just_saved = True  # the dashboard shows a "saved" toast
         st.switch_page("dashboard/app.py")

@@ -92,6 +92,10 @@ mi = theme.mi
 
 with st.sidebar:
     st.markdown(theme.logo_html("Your AI assistant's safety guard"), unsafe_allow_html=True)
+    # In the sidebar, not above the greeting, so the page starts with the header.
+    if st.button("Back to the questions", icon=":material/edit_note:", key="back_to_questions", width="stretch"):
+        st.session_state["step"] = "questions"  # the answers stay in raw_answers, so the form opens filled in
+        st.switch_page("onboarding/app.py")
     st.subheader("Settings")
     paused = st.toggle("Pause live updates", value=False, help="Freeze the screen, e.g. while presenting")
     show_tech = st.toggle("Show technical details", value=False,
@@ -306,10 +310,7 @@ def render_activity(events: list[dict]) -> None:
 if st.session_state.get("row_limit_auto", True):
     row_limit = DEFAULT_ROWS  # sidebar max may be stale between full reruns; show the newest 100
 
-# Outside the live fragment, so it isn't redrawn every 2s.
-if st.button("Back to the questions", icon=":material/edit_note:", key="back_to_questions"):
-    st.session_state["step"] = "questions"  # the answers stay in raw_answers, so the form opens filled in
-    st.switch_page("onboarding/app.py")
+# Outside the live fragment, so it isn't shown again every 2s.
 if st.session_state.pop("just_saved", False):
     st.toast("Rules saved. The guard uses them from the next action.", icon=":material/task_alt:")
 

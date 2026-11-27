@@ -1,6 +1,6 @@
 """The onboarding questionnaire (English UI): 11 yes/no questions in three parts, and cleaning of the answers.
 
-Every question is a checkbox with its own icon. Its starting state is the "if not answered" default of the questionnaire, which is
+Every question is a toggle with its own icon. Its starting state is the "if not answered" default of the questionnaire, which is
 always the cautious answer, so a form left untouched produces a cautious policy.
 
 Five questions ask for a follow-up when ticked: 1 and 2 let the owner choose the amount (in shekels, with a
