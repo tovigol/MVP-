@@ -41,15 +41,8 @@ def policy(answers):
     return build_policy(answers, baseline_rules(answers))
 
 
-class FakeDB:
-    def __init__(self, total=0.0):
-        self.total = total
-
-    def daily_total_usd(self):
-        return self.total
-
-
 # --- the contract with the real engine (Person 1) -------------------------------------------
+# evaluate(tool, args, policy, registry, daily_total_usd): today's payment total is passed in as a number.
 
 @pytest.mark.parametrize("tool, args, total, expected", [
     ("stripe_create_payment_link", {"amount": 8000}, 0, "allow"),      # $80
@@ -66,19 +59,19 @@ class FakeDB:
     ("crm_export_all", {}, 0, "deny"),
 ])
 def test_baseline_policy_through_real_engine(policy, tool, args, total, expected):
-    assert evaluate(tool, args, policy, REGISTRY, FakeDB(total)).effect == expected
+    assert evaluate(tool, args, policy, REGISTRY, total).effect == expected
 
 
 def test_operator_sets_match_the_engine():
-    assert AMOUNT_OPERATORS | RECIPIENT_OPERATORS == OPERATORS
+    assert AMOUNT_OPERATORS | RECIPIENT_OPERATORS == set(OPERATORS)  # OPERATORS is a name -> handler dict
 
 
 def test_forbidding_everything_denies(answers):
     answers["forbidden"] = ["bulk_export", "external_email", "all_payments"]
     policy = build_policy(answers, baseline_rules(answers))
     assert validate_policy(policy) == []
-    assert evaluate("stripe_create_payment_link", {"amount": 100}, policy, REGISTRY, FakeDB()).effect == "deny"
-    assert evaluate("email_send_email", {"to": "x@gmail.com"}, policy, REGISTRY, FakeDB()).effect == "deny"
+    assert evaluate("stripe_create_payment_link", {"amount": 100}, policy, REGISTRY, 0).effect == "deny"
+    assert evaluate("email_send_email", {"to": "x@gmail.com"}, policy, REGISTRY, 0).effect == "deny"
 
 
 # --- validation ------------------------------------------------------------------------------
