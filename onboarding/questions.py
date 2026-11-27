@@ -3,17 +3,20 @@
 Every question is a checkbox with its own icon. Its starting state is the "if not answered" default of the questionnaire, which is
 always the cautious answer, so a form left untouched produces a cautious policy.
 
-Three questions ask for a follow-up when ticked (3: supplier names, 5: the office's mail domain, 6: the fixed
-addresses). Question 5's domain is not in the spec text: without it "mail inside the office" cannot be matched.
+Five questions ask for a follow-up when ticked: 1 and 2 let the owner choose the amount (in shekels, with a
+suggestion), 3 asks for supplier names, 5 for the office's mail domain, 6 for the fixed addresses. Question 5's
+domain is not in the spec text: without it "mail inside the office" cannot be matched.
 """
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Literal
 
-AUTO_PAY_LIMIT_ILS = 2000   # question 1
-DAILY_LIMIT_ILS = 7000      # question 2
+AUTO_PAY_LIMIT_ILS = 2000   # question 1: the suggested amount (the owner can choose another)
+DAILY_LIMIT_ILS = 7000      # question 2: the suggested amount (the owner can choose another)
+MAX_AMOUNT_ILS = 10_000_000  # sanity bound for an amount typed by hand
 
 # Allowing a free-mail domain would allow every address at that provider, so such domains are never
 # turned into an allow rule (the engine compares whole domains, not single addresses).
@@ -32,6 +35,8 @@ class FollowUp:
     id: str
     label: str
     placeholder: str
+    kind: str = "text"   # "text", or "amount": a number of shekels the owner chooses
+    default: int = 0     # the suggested amount (kind "amount")
 
 
 @dataclass(frozen=True)
@@ -53,11 +58,17 @@ SECTIONS = {"payments": ":material/payments: Part 1: Payments",
 
 QUESTIONS: list[Question] = [
     Question("pay_auto", 1, "payments",
-             f"Can the agent pay without asking you, up to ₪{AUTO_PAY_LIMIT_ILS:,}?",
-             False, ":red[:material/close:] No, every payment needs your approval", icon="bolt"),
+             "Can the agent pay without asking you, up to an amount you choose?",
+             False, ":red[:material/close:] No, every payment needs your approval",
+             FollowUp("auto_limit_ils", "Up to how much, in shekels (₪), can the agent pay without asking?", "",
+                      kind="amount", default=AUTO_PAY_LIMIT_ILS),
+             icon="bolt"),
     Question("pay_daily_limit", 2, "payments",
-             f"Limit the total payments per day to ₪{DAILY_LIMIT_ILS:,}?",
-             True, ":green[:material/check:] Yes, there is a limit", icon="today"),
+             "Limit the total payments per day?",
+             True, f":green[:material/check:] Yes, there is a limit (₪{DAILY_LIMIT_ILS:,} by default)",
+             FollowUp("daily_limit_ils", "What is the most the agent can pay in a day, in shekels (₪)?", "",
+                      kind="amount", default=DAILY_LIMIT_ILS),
+             icon="today"),
     Question("pay_trusted_suppliers", 3, "payments",
              "Can the agent pay your regular suppliers without asking?",
              False, ":red[:material/close:] No",
@@ -106,6 +117,19 @@ def _domain_of(token: str) -> str:
     return domain[4:] if domain.startswith("www.") else domain
 
 
+def _amount(value, default: int):
+    """A positive number of shekels (whole when it can be), the default when nothing was given, None if invalid."""
+    if value is None or str(value).strip() == "":
+        return default
+    try:
+        number = float(str(value).replace(",", "").replace("₪", "").strip())
+    except ValueError:
+        return None
+    if isinstance(value, bool) or not math.isfinite(number) or number <= 0 or number > MAX_AMOUNT_ILS:
+        return None
+    return int(number) if number == int(number) else round(number, 2)
+
+
 def parse_domains(text) -> tuple[list[str], list[str]]:
     """(valid lowercase domains, invalid tokens). Accepts 'a@b.com' and 'https://b.com' too."""
     valid: list[str] = []
@@ -145,6 +169,19 @@ def clean_answers(raw: dict) -> tuple[dict, list[str]]:
     problems: list[str] = []
     warnings: list[str] = []
     answers: dict = {q.id: bool(raw.get(q.id, q.default)) for q in QUESTIONS}
+
+    # 1 and 2: the amounts the owner chose (a missing value means the suggested amount)
+    for question_id, number in (("pay_auto", 1), ("pay_daily_limit", 2)):
+        follow_up = QUESTION_BY_ID[question_id].follow_up
+        answers[follow_up.id] = None
+        if answers[question_id]:
+            amount = _amount(raw.get(follow_up.id), follow_up.default)
+            if amount is None:
+                problems.append(f"Question {number}: please choose an amount in shekels, above zero.")
+            answers[follow_up.id] = amount
+    auto, daily = answers["auto_limit_ils"], answers["daily_limit_ils"]
+    if auto and daily and daily < auto:
+        problems.append("Question 2: the daily limit must be at least the amount you chose in question 1.")
 
     # 3: supplier names (kept for the record; the engine cannot match a payee, see baseline.limitation_notes)
     names = [n.strip() for n in re.split(r"[,\n;]+", str(raw.get("supplier_names") or "")) if n.strip()]
