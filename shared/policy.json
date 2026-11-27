@@ -1,6 +1,58 @@
 {
   "business": "",
   "company_domains": [],
-  "default_by_risk": {"read": "allow", "write": "ask", "destructive": "ask"},
-  "rules": []
+  "default_by_risk": {
+    "read": "allow",
+    "write": "ask",
+    "destructive": "deny"
+  },
+  "rules": [
+    {
+      "id": "pay-auto",
+      "category": "payment",
+      "effect": "allow",
+      "when": {
+        "amount_usd_lte": 540,
+        "daily_total_usd_lte": 1891
+      },
+      "explain": "תשלום עד 2,000 ₪ וסה\"כ יומי עד 7,000 ₪ מבוצע אוטומטית"
+    },
+    {
+      "id": "pay-ask",
+      "category": "payment",
+      "effect": "ask",
+      "when": {
+        "daily_total_usd_lte": 1891
+      },
+      "explain": "תשלומים בתוך סה\"כ יומי עד 7,000 ₪ דורשים אישור"
+    },
+    {
+      "id": "pay-daily-block",
+      "category": "payment",
+      "effect": "deny",
+      "when": {},
+      "explain": "תשלומים שגורמים לעבור את סה\"כ היומי של 7,000 ₪ נחסמים"
+    },
+    {
+      "id": "email-unknown",
+      "category": "email_send",
+      "effect": "ask",
+      "when": {},
+      "explain": "דוא\"ל לכתובות לא מוכרות דורש אישור"
+    },
+    {
+      "id": "read-all",
+      "category": "read",
+      "effect": "allow",
+      "when": {},
+      "explain": "גישה לכל הנתונים מאושרת"
+    },
+    {
+      "id": "no-export",
+      "category": "bulk_export",
+      "effect": "deny",
+      "when": {},
+      "explain": "ייצוא נתונים חסום"
+    }
+  ]
 }

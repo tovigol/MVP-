@@ -369,14 +369,26 @@ def test_a_policy_that_misreads_the_answers_is_caught(answers, policy, mutate, f
 @pytest.mark.parametrize("rule_id, text, fragment", [
     ("email-internal", "מיילים פנימיים נשלחים אוטומטית; המגבלה היומית היא 7,000 ₪", "must not mention amounts"),
     ("no-export", "ייצוא חסום, עד $5", "must not mention amounts"),
-    ("pay-auto", "תשלום עד 3,500 ₪ מתבצע אוטומטית", "not one of the two limits"),
+    ("pay-auto", "תשלום עד 3,500 ₪ מתבצע אוטומטית", "not about"),
     ("pay-auto", "Payments are automatic", "must be in Hebrew"),
+    ("pay-auto", "תשלומים עד 540 $ מתבצעים אוטומטית", "write amounts in shekels"),
     ("read-all", "קריאה מותרת " + "מאוד " * 60, "one short sentence"),
 ])
 def test_wrong_facts_in_an_explanation_are_caught(policy, rule_id, text, fragment):
     wrong = copy.deepcopy(policy)
     _rule(wrong, rule_id)["explain"] = text
     assert any(fragment in p for p in explain_problems(wrong)), explain_problems(wrong)
+
+
+def test_a_rule_may_only_mention_the_amounts_it_is_about(answers, policy):
+    # Seen live: the explanation of the daily block also claimed payments above 2,000 ₪ are blocked (they only ask).
+    wrong = copy.deepcopy(policy)
+    _rule(wrong, "pay-daily-block")["explain"] = "חוסם תשלום שחורג מ־7,000 ₪ ליום או מעל 2,000 ₪ לתשלום"
+    assert any("not about" in p for p in explain_problems(wrong, answers))
+    assert explain_problems(wrong) == []  # without the answers only the two limits are known
+    right = copy.deepcopy(policy)
+    _rule(right, "pay-daily-block")["explain"] = "תשלום שחורג מ־7,000 ₪ ליום חסום"
+    assert explain_problems(right, answers) == []
 
 
 def test_the_two_limits_may_be_named_in_either_currency(policy):

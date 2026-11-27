@@ -1,1 +1,39 @@
-{}
+{
+  "stripe_create_payment": {
+    "category": "payment",
+    "risk": "write",
+    "amount_field": "amount_cents",
+    "amount_unit": "cents",
+    "source": "reviewed"
+  },
+  "stripe_list_customers": {
+    "category": "read",
+    "risk": "read",
+    "source": "reviewed"
+  },
+  "stripe_list_payments": {
+    "category": "read",
+    "risk": "read",
+    "source": "reviewed"
+  },
+  "email_send_email": {
+    "category": "email_send",
+    "risk": "write",
+    "recipient_fields": [
+      "to",
+      "cc",
+      "bcc"
+    ],
+    "source": "reviewed"
+  },
+  "crm_get_customer": {
+    "category": "read",
+    "risk": "read",
+    "source": "reviewed"
+  },
+  "crm_export_all": {
+    "category": "bulk_export",
+    "risk": "write",
+    "source": "reviewed"
+  }
+}
