@@ -1,0 +1,27 @@
+{
+  "business": "נועה נכסים",
+  "company_domains": ["noa-realty.com"],
+  "default_by_risk": {"read": "allow", "write": "ask", "destructive": "ask"},
+  "rules": [
+    {"id": "pay-auto", "category": "payment", "effect": "allow",
+     "when": {"amount_usd_lte": 500, "daily_total_usd_lte": 1500},
+     "explain": "העברות עד $500 (ועד $1,500 ביום) מתבצעות אוטומטית"},
+    {"id": "pay-ask", "category": "payment", "effect": "ask",
+     "when": {"amount_usd_lte": 5000},
+     "explain": "העברות עד $5,000 דורשות את אישורה של נועה"},
+    {"id": "pay-block", "category": "payment", "effect": "deny", "when": {},
+     "explain": "העברות מעל $5,000 נועה עושה רק בעצמה, בבנק"},
+    {"id": "email-internal", "category": "email_send", "effect": "allow",
+     "when": {"all_recipients_in": "company_domains"},
+     "explain": "מיילים לצוות המשרד נשלחים אוטומטית"},
+    {"id": "email-trusted", "category": "email_send", "effect": "allow",
+     "when": {"all_recipients_in": ["shalev-law.co.il"]},
+     "explain": "מיילים לעורך הדין הקבוע (shalev-law.co.il) נשלחים אוטומטית"},
+    {"id": "email-external", "category": "email_send", "effect": "ask", "when": {},
+     "explain": "מיילים ללקוחות חדשים ולכתובות לא מוכרות דורשים את אישורה של נועה"},
+    {"id": "read-all", "category": "read", "effect": "allow", "when": {},
+     "explain": "קריאת פרטי לקוח מותרת"},
+    {"id": "no-export", "category": "bulk_export", "effect": "deny", "when": {},
+     "explain": "ייצוא רשימת הלקוחות המלאה חסום תמיד"}
+  ]
+}
