@@ -19,9 +19,12 @@ from onboarding.policy_schema import CATEGORIES
 from onboarding.questions import QUESTIONS, SECTIONS, clean_answers
 from onboarding.translate import save_policy, translate_answers
 
-CATEGORY_HE = {"payment": "💳 תשלומים", "email_send": "✉️ שליחת מייל",
-               "read": "👁️ קריאת מידע", "bulk_export": "📦 ייצוא מידע מלא"}
-EFFECT_HE = {"allow": ("✅", "אוטומטי"), "ask": ("✋", "דורש אישור"), "deny": ("⛔", "חסום")}
+# Icons are Material Symbols (Streamlit markdown ':material/name:', names at https://fonts.google.com/icons).
+CATEGORY_HE = {"payment": ":material/payments: תשלומים", "email_send": ":material/mail: שליחת מייל",
+               "read": ":material/visibility: קריאת מידע", "bulk_export": ":material/inventory_2: ייצוא מידע מלא"}
+EFFECT_HE = {"allow": (":green[:material/check_circle:]", "אוטומטי"),
+             "ask": (":orange[:material/front_hand:]", "דורש אישור"),
+             "deny": (":red[:material/block:]", "חסום")}
 # {label} is the provider's name (Azure OpenAI / Claude), see llm.provider_label.
 SOURCE_HE = {"llm": "החוקים נוצרו על ידי {label} ועברו בדיקה מול התשובות שלך.",
              "llm_retry": "החוקים נוצרו על ידי {label}. הניסיון הראשון תוקן אוטומטית ועבר בדיקה מול התשובות שלך."}
@@ -56,14 +59,14 @@ def md(text: str) -> str:
 
 
 def questions_step() -> None:
-    st.title("🛡️ הגדרת חוקים לסוכן שלך")
+    st.title(":material/shield: הגדרת חוקים לסוכן שלך")
     provider = active_provider()
     label = provider_label(provider)
     st.write(f"סמני את מה שמתאים. {label} יהפוך את התשובות לחוקים שה־Guard יאכוף על כל פעולה של הסוכן. "
              "מה שלא סימנת נשאר כמו ברירת המחדל, שהיא תמיד האפשרות הזהירה.")
     problems = credentials_problems(provider)
     if not problems:
-        st.caption(f"🟢 {label} מוגדר: התשובות יעובדו על ידי המודל.")
+        st.caption(f":green[:material/check_circle:] {label} מוגדר: התשובות יעובדו על ידי המודל.")
     else:
         st.warning(f"הגדרות החיבור ל־{label} בקובץ .env חסרות או לא תקינות, ולכן המודל לא יעבד את התשובות. "
                    "החוקים ייבנו ישירות מהתשובות. לתקן ב־.env ולהגיש שוב.")
@@ -97,7 +100,7 @@ def questions_step() -> None:
 def review_step() -> None:
     result = st.session_state.result
     policy = result.policy
-    st.title("✔️ אישור החוקים")
+    st.title(":material/task_alt: אישור החוקים")
     label = provider_label(result.provider)
     if result.source == "fallback":
         st.warning(FALLBACK_HE.get(result.fallback_reason, FALLBACK_HE["api_error"]).format(label=label))
@@ -115,7 +118,7 @@ def review_step() -> None:
             icon, effect = EFFECT_HE[rule["effect"]]
             st.markdown(md(f"{icon} **{effect}** · {rule['explain']}"))
 
-    st.subheader("🗑️ מחיקה וכלים חדשים")
+    st.subheader(":material/delete: מחיקה וכלים חדשים")
     icon, effect = EFFECT_HE[policy["default_by_risk"]["destructive"]]
     st.markdown(f"{icon} **{effect}** · מחיקת חשבוניות או מסמכים")
     icon, effect = EFFECT_HE[policy["default_by_risk"]["write"]]
@@ -138,7 +141,7 @@ def review_step() -> None:
         st.success("החוקים נשמרו ב־shared/policy.json. ה־Gateway יקרא אותם בקריאה הבאה של הסוכן.")
 
 
-st.set_page_config(page_title="AgentGuard · הגדרת חוקים", page_icon="🛡️", layout="centered")
+st.set_page_config(page_title="AgentGuard · הגדרת חוקים", page_icon=":material/shield:", layout="centered")
 st.markdown(RTL_CSS, unsafe_allow_html=True)
 if st.session_state.get("step", "questions") == "review":
     review_step()

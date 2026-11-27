@@ -45,45 +45,48 @@ class Question:
     follow_up: FollowUp | None = None
 
 
-SECTIONS = {"payments": "💰 חלק א: תשלומים", "mail": "📧 חלק ב: מיילים", "data": "📂 חלק ג: מידע"}
+# Section titles and default notes are Streamlit markdown: ":material/name:" is a Material Symbols icon.
+SECTIONS = {"payments": ":material/payments: חלק א: תשלומים",
+            "mail": ":material/mail: חלק ב: מיילים",
+            "data": ":material/folder_open: חלק ג: מידע"}
 
 QUESTIONS: list[Question] = [
     Question("pay_auto", 1, "payments",
              f"האם הסוכן יכול לשלם בלי לשאול אותך, עד {AUTO_PAY_LIMIT_ILS:,} ₪?",
-             False, "❌ לא, כל תשלום מגיע לאישור"),
+             False, ":red[:material/close:] לא, כל תשלום מגיע לאישור"),
     Question("pay_daily_limit", 2, "payments",
              f"האם להגביל את סך התשלומים ביום ל-{DAILY_LIMIT_ILS:,} ₪?",
-             True, "✅ כן, יש הגבלה"),
+             True, ":green[:material/check:] כן, יש הגבלה"),
     Question("pay_trusted_suppliers", 3, "payments",
              "האם הסוכן יכול לשלם לספקים הקבועים שלך בלי לשאול?",
-             False, "❌ לא",
+             False, ":red[:material/close:] לא",
              FollowUp("supplier_names", "שמות הספקים הקבועים", "למשל: חברת החשמל, ספק הקמח")),
     Question("pay_new_supplier_asks", 4, "payments",
              "האם תשלום לספק חדש יגיע אלייך לאישור, גם בסכום קטן?",
-             True, "✅ כן, תמיד לאישור"),
+             True, ":green[:material/check:] כן, תמיד לאישור"),
     Question("mail_internal", 5, "mail",
              "האם הסוכן יכול לשלוח מייל לתוך המשרד שלך בלי לשאול?",
-             False, "❌ לא",
+             False, ":red[:material/close:] לא",
              FollowUp("internal_domain", "הדומיין של המשרד", "office.co.il")),
     Question("mail_trusted", 6, "mail",
              "האם הסוכן יכול לשלוח מייל לכתובות קבועות, כמו רשות המסים ורואה החשבון, בלי לשאול?",
-             False, "❌ לא",
+             False, ":red[:material/close:] לא",
              FollowUp("trusted_addresses", "הכתובות הקבועות", "accountant@cpa-firm.co.il, office@taxes.gov.il")),
     Question("mail_unknown_asks", 7, "mail",
              "האם מייל לכתובת לא מוכרת יגיע אלייך לאישור?",
-             True, "✅ כן"),
+             True, ":green[:material/check:] כן"),
     Question("mail_files", 8, "mail",
              "האם הסוכן יכול לשלוח ללקוח קובץ, כמו דוח או תלוש, בלי שתראי קודם?",
-             False, "❌ לא"),
+             False, ":red[:material/close:] לא"),
     Question("block_export", 9, "data",
              "האם לחסום תמיד ייצוא של כל רשימת הלקוחות?",
-             True, "✅ כן, חסום"),
+             True, ":green[:material/check:] כן, חסום"),
     Question("block_delete", 10, "data",
              "האם לחסום תמיד מחיקה של חשבוניות או מסמכים?",
-             True, "✅ כן, חסום"),
+             True, ":green[:material/check:] כן, חסום"),
     Question("read_allowed", 11, "data",
              "האם הסוכן יכול לקרוא מידע, כמו חשבוניות ופרטי לקוחות, בלי לשאול?",
-             True, "✅ כן, קריאה בלבד מותרת"),
+             True, ":green[:material/check:] כן, קריאה בלבד מותרת"),
 ]
 
 QUESTION_BY_ID = {q.id: q for q in QUESTIONS}
