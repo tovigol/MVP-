@@ -65,7 +65,7 @@ def _send_via_resend(to_list: list[str], cc_list: list[str], bcc_list: list[str]
 
     api_key = os.getenv("RESEND_API_KEY")
     if not api_key:
-        raise RuntimeError("RESEND_API_KEY is missing in .env")
+        raise RuntimeError("RESEND_API_KEY not set (the gateway passes it from .env; set it in the environment when running standalone)")
 
     resend.api_key = api_key
     payload: dict = {
@@ -91,7 +91,7 @@ def _send_via_smtp(to_list: list[str], cc_list: list[str], bcc_list: list[str], 
     user = os.getenv("SMTP_USER")
     password = os.getenv("SMTP_PASSWORD")
     if not user or not password:
-        raise RuntimeError("SMTP_USER or SMTP_PASSWORD is missing in .env")
+        raise RuntimeError("SMTP_USER or SMTP_PASSWORD not set (the gateway passes it from .env; set it in the environment when running standalone)")
 
     msg = MIMEText(body, "plain", "utf-8")
     msg_id = make_msgid()

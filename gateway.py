@@ -1,4 +1,5 @@
-"""AgentGuard gateway: FastMCP proxy on /mcp (skeleton: no policy/logging yet).
+"""AgentGuard gateway: FastMCP proxy on /mcp that mounts the upstream MCP servers and runs every
+tool call through the Guard middleware (token check, policy, approvals, event log).
 
 FastMCP facts verified against installed fastmcp 4.2.6 source:
  (a) create_proxy accepts a FastMCP instance (also Client, transport, MCPConfig dict).
@@ -192,8 +193,8 @@ def main() -> None:
     token = os.environ.get("GUARD_TOKEN") or None
     check_bind(host, token)
     try:
-        for name in asyncio.run(startup_check(UPSTREAMS, load_registry())):
-            print(f"WARNING: tool {name} is not in the registry (it will be denied)", flush=True)
+        for name in asyncio.run(asyncio.wait_for(startup_check(UPSTREAMS, load_registry()), 30)):
+            print(f"WARNING: tool {name} is not in the registry (treated as write: needs approval)", flush=True)
     except Exception as exc:
         print(f"WARNING: registry check SKIPPED, no tools were checked: {exc}", flush=True)
     gw = build_gateway(UPSTREAMS, token)

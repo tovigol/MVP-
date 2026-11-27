@@ -360,7 +360,8 @@ def _fake_root(tmp_path, files=("stripe_server.py", "email_server.py", "crm_serv
 
 
 ENV = {"STRIPE_API_KEY": "rk_test_x", "RESEND_API_KEY": "re_x", "SMTP_HOST": "h",
-       "SMTP_PASS": "p", "EMAIL_FROM": "a@b.c", "SMTP_USER": "", "ANTHROPIC_API_KEY": "sk"}
+       "SMTP_PASSWORD": "p", "EMAIL_FROM": "a@b.c", "SMTP_USER": "", "ANTHROPIC_API_KEY": "sk",
+       "SLACK_BOT_TOKEN": "xoxb"}
 
 
 def test_build_upstreams_all_present(tmp_path):
@@ -372,8 +373,10 @@ def test_build_upstreams_all_present(tmp_path):
         assert s["args"] == [str(root / f"{name}_server.py")]
     assert servers["stripe"]["env"] == {"STRIPE_API_KEY": "rk_test_x"}
     assert servers["email"]["env"] == {"RESEND_API_KEY": "re_x", "SMTP_HOST": "h",
-                                       "SMTP_PASS": "p", "EMAIL_FROM": "a@b.c"}
+                                       "SMTP_PASSWORD": "p", "EMAIL_FROM": "a@b.c"}
     assert "STRIPE_API_KEY" not in servers["email"]["env"]
+    for k in ("ANTHROPIC_API_KEY", "SLACK_BOT_TOKEN"):
+        assert k not in servers["email"]["env"]
     assert not servers["crm"].get("env")
 
 
@@ -392,3 +395,24 @@ def test_startup_check_works_when_token_set(monkeypatch):
     missing = run(gateway.startup_check(mock_server, registry))
     assert missing and "email_send_email" not in missing
     assert "email_send_email" in run(gateway.startup_check(mock_server, {}))
+
+
+def test_real_config_stdio_blocked_call_not_forwarded(tmp_guard):
+    import sys
+    from pathlib import Path
+
+    mock = str(Path(mock_email_server.__file__).resolve())
+    config = {"mcpServers": {"email": {"command": sys.executable, "args": [mock]}}}
+
+    async def go():
+        async with Client(gateway.build_gateway(config)) as c:
+            names = {t.name for t in await c.list_tools()}
+            return names, await c.call_tool("email_export_all", {}, raise_on_error=False)
+
+    names, r = run(go())
+    assert {"email_send_email", "email_export_all"} <= names
+    assert r.is_error
+    assert r.content[0].text.startswith("Blocked by policy:")
+    event = store.recent_events()[0]
+    assert event["tool"] == "email_export_all"
+    assert event["outcome"] == "blocked"
