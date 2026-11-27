@@ -7,11 +7,10 @@ from email.header import Header
 from email.mime.text import MIMEText
 from email.utils import getaddresses, make_msgid
 from pathlib import Path
-from dotenv import load_dotenv
 from fastmcp import FastMCP
 
 BASE_DIR = Path(__file__).resolve().parent
-load_dotenv(BASE_DIR / ".env", override=True)
+# Keys come from the gateway's per-server env (see build_upstreams in gateway.py).
 
 SENT_LOG_PATH = BASE_DIR / "sent_emails.jsonl"
 mcp = FastMCP("email")
@@ -66,7 +65,7 @@ def _send_via_resend(to_list: list[str], cc_list: list[str], bcc_list: list[str]
 
     api_key = os.getenv("RESEND_API_KEY")
     if not api_key:
-        raise RuntimeError("RESEND_API_KEY is missing in .env")
+        raise RuntimeError("RESEND_API_KEY not set (the gateway passes it from .env; set it in the environment when running standalone)")
 
     resend.api_key = api_key
     payload: dict = {
@@ -90,9 +89,9 @@ def _send_via_smtp(to_list: list[str], cc_list: list[str], bcc_list: list[str], 
     host = os.getenv("SMTP_HOST", "smtp.gmail.com")
     port = int(os.getenv("SMTP_PORT", "587"))
     user = os.getenv("SMTP_USER")
-    password = os.getenv("SMTP_PASS")
+    password = os.getenv("SMTP_PASSWORD")
     if not user or not password:
-        raise RuntimeError("SMTP_USER or SMTP_PASS is missing in .env")
+        raise RuntimeError("SMTP_USER or SMTP_PASSWORD not set (the gateway passes it from .env; set it in the environment when running standalone)")
 
     msg = MIMEText(body, "plain", "utf-8")
     msg_id = make_msgid()

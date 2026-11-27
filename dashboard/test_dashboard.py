@@ -67,7 +67,7 @@ def test_recipients_and_summary():
 def test_destructive_reason():
     row = {"reason": "[DESTRUCTIVE] Deletes a customer"}
     assert data.is_destructive(row)
-    assert data.reason_text(row) == "🔴 Can't be undone. Deletes a customer"
+    assert data.reason_text(row) == "Can't be undone. Deletes a customer"
     assert not data.is_destructive({"reason": None})
 
 
@@ -109,8 +109,8 @@ def test_seconds_left():
 def test_to_frame_and_filter():
     df = data.to_frame(EVENTS)
     assert list(df["id"]) == [1, 2, 3, 4, 5, 6, 7]
-    assert df.loc[2, "Result"] == "🛑 Stopped"
-    assert df.loc[5, "Result"] == "⏳ Waiting for you"
+    assert df.loc[2, "Result"] == "Stopped"
+    assert df.loc[5, "Result"] == "Waiting for you"
     assert df.loc[0, "Rule"] == "default"
     assert list(data.filter_view(df, "Sent for approval")["id"]) == [4, 5, 6]
     assert list(data.filter_view(df, "Stopped")["id"]) == [3]
@@ -184,5 +184,11 @@ def test_default_database_is_the_real_guard_db():
 
 def test_owner_summary_in_words():
     assert data.owner_summary(data.counters([])) == "Nothing needed your OK"
-    assert data.owner_summary(data.counters([ev(1, "ask", "rejected")])) == "1 declined · ✓ All answered"
+    assert data.owner_summary(data.counters([ev(1, "ask", "rejected")])) == "1 declined · All answered"
     assert data.owner_summary(data.counters(EVENTS)) == "1 approved · 1 expired · 1 waiting now"
+
+
+def test_result_md_uses_material_icons():
+    assert data.result_md("blocked") == ":material/block: Stopped"
+    assert data.result_md("forwarded") == ":material/check_circle: Done automatically"
+    assert data.result_md("something_new") == "something_new"

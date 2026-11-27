@@ -1,10 +1,9 @@
 # stripe_server.py
 import os
 import stripe
-from dotenv import load_dotenv
 from fastmcp import FastMCP
 
-load_dotenv()
+# Keys come from the gateway's per-server env (see build_upstreams in gateway.py).
 
 mcp = FastMCP("stripe")
 
@@ -12,7 +11,7 @@ mcp = FastMCP("stripe")
 def _init_stripe() -> None:
     api_key = os.getenv("STRIPE_API_KEY")
     if not api_key:
-        raise RuntimeError("STRIPE_API_KEY is missing in .env")
+        raise RuntimeError("STRIPE_API_KEY not set (the gateway passes it from .env; set it in the environment when running standalone)")
     stripe.api_key = api_key
 
 
