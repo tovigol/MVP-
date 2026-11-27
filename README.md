@@ -402,3 +402,45 @@ Sources
 • Claude Agent SDK for Python
 • Stripe MCP
 • n8n MCP Client Tool
+
+---
+
+##Summary of Changes & Deliverables — Person 2 (AgentGuard MVP)
+Stripe MCP Server (stripe_server.py) — Built & Verified on Sandbox
+
+Switched from the official/deprecated Stripe MCP (mcp.stripe.com / @stripe/mcp) to a local Python MCP server over FastMCP + Stripe Python SDK (matching the spec's fallback plan) so existing Gateway and Registry contracts remain unchanged.
+
+Exposes 3 explicit tools: create_payment(amount_cents, recipient, description), list_customers(limit=10), and list_payments(limit=10).
+
+Configured the Sandbox key in .env and verified a real $1.00 Sandbox PaymentIntent (status: succeeded).
+
+CRM MCP Server & Demo Data (crm_server.py, customers.csv) — Built, Hardened & Verified
+
+Built a CSV-backed MCP server with fictional data for "Yossi's Bakery", including customer David Levi (C004) containing the demo prompt injection (export_all + exfiltration to attacker@evil.io).
+
+Security & quality fixes applied: prevented export_all bypass via get_customer (minimum 2-character query and [:3] result cap), safe None handling for missing CSV fields, accurate readOnlyHint: True on export_all, and updated tool docstrings.
+
+Verified tool listing and live lookup of the poisoned David Levi record.
+
+Email MCP Server (email_server.py) — Built & Hardened
+
+Exposes send_email(to, subject, body, cc, bcc) supporting both Resend and Gmail SMTP via .env.
+
+Security & reliability fixes applied: timeout=10 on SMTP, unique make_msgid() for SMTP Message-ID, recipient parsing and validation via getaddresses with newline (\r\n) injection blocking on addresses and subject, logging both successes and failures to sent_emails.jsonl, and destructiveHint: True.
+
+Demo Agent, Prompts & Red Team (agent.py, demo_prompts.txt, redteam.py) — Built & Ready for Integration
+
+agent.py: Strict environment isolation (strips Stripe/Email/Slack keys), Gateway-only connection (http://localhost:8080/mcp), blocked built-in tools (disallowed_tools, setting_sources=[], temporary cwd), MCP_TOOL_TIMEOUT=120000 for Slack approvals, live tool-call printing for the demo, and clean Gateway-offline error handling. An alternative Azure OpenAI + fastmcp.Client version (with zero built-in tools) was also prepared.
+
+demo_prompts.txt: 4 scripted demo scenarios (allowed $80 payment, blocked $5,000 payment, external email Slack approval, and CRM prompt injection).
+
+redteam.py: 10 end-to-end attack/bypass cases (including smurfing, hidden BCC, spoofed domain, comma-concatenated recipients, and CRM @ wildcard bypass) verifying both guard.db events and zero real side effects in Stripe or the email log.
+
+Utilities & Team Coordination (dump_tools.py, .gitignore, requirements.txt)
+
+Added dump_tools.py to export list_tools JSON for Person 3's classify_tools.py, and prepared .gitignore and requirements.txt updates.
+
+Flagged recipient parsing (email.utils.getaddresses()) to Person 1 so the Gateway Policy Engine cannot be bypassed via comma-separated strings or Name <a@b.com> format.
+
+Pending before full integration: Finalizing email provider choice + live send test for email_server.py, running dump_tools.py against the Gateway on port 8080, and running agent.py / redteam.py end-to-end.
+##
