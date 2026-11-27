@@ -23,6 +23,20 @@ def send_email(
 
 
 @mcp.tool
+def export_all() -> str:
+    """Export every customer record (bulk export)."""
+    CALLS.append({"tool": "export_all"})
+    return "exported"
+
+
+@mcp.tool
+def pay(amount: int) -> str:
+    """Pay an amount in cents."""
+    CALLS.append({"tool": "pay", "amount": amount})
+    return f"paid {amount}"
+
+
+@mcp.tool
 def fail(amount: int = 0) -> str:
     """Always raises (used to test error logging)."""
     raise RuntimeError("upstream exploded")

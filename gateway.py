@@ -11,6 +11,7 @@ FastMCP facts verified against installed fastmcp 4.2.6 source:
  NOTE: create_proxy on a single-server MCPConfig does NOT prefix tool names, so
      build_gateway mounts each upstream with namespace=<server name>.
 """
+import asyncio
 import hmac
 import os
 import sys
@@ -22,7 +23,7 @@ from fastmcp.server import create_proxy
 from fastmcp.server.dependencies import get_http_headers
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from shared import store
-from shared.policy import Decision, load_registry, log_fields
+from shared.policy import Decision, evaluate, load_policy, load_registry, log_fields
 
 UPSTREAMS = {
     "mcpServers": {
@@ -43,6 +44,13 @@ def check_bind(host: str, token: str | None) -> None:
         )
 
 
+def _best_effort(fn, *args) -> None:
+    try:
+        fn(*args)
+    except Exception:
+        pass
+
+
 class Guard(Middleware):
     def __init__(self, token: str | None = None):
         self.token = token
@@ -59,14 +67,57 @@ class Guard(Middleware):
         tool = context.message.name
         args = context.message.arguments or {}
         agent = get_http_headers(include_all=True).get("x-agent") or "agent"
-        # Fail closed: nothing is forwarded unless the event row was written.
-        # No await in this block (Task 3 adds the daily total + decision here).
+        # Fail closed. No await from here through log_event: one asyncio loop
+        # stays atomic, so concurrent payments cannot both pass the daily limit.
+        category = amount_usd = None
         try:
-            category, amount_usd = log_fields(tool, args, load_registry())
-            decision = Decision("allow", None, "logging only", "")
+            registry = load_registry()
+            category, amount_usd = log_fields(tool, args, registry)
+            decision = evaluate(tool, args, load_policy(), registry,
+                                store.daily_payment_total())
+        except Exception as exc:
+            decision = Decision("deny", None, f"Check failed: {exc}", "Policy check failed")
+        try:
             event_id = store.log_event(tool, args, decision, category, amount_usd, agent)
         except Exception as exc:
             raise ToolError("Denied: guard could not record this call") from exc
+        if decision.effect == "ask":
+            # Still no await since log_event: create the approval before waiting.
+            try:
+                approval_id = store.create_approval(event_id)
+            except Exception as exc:
+                _best_effort(store.update_outcome, event_id, "timeout")
+                raise ToolError("Denied: guard could not record this call") from exc
+            return await self._ask(context, call_next, event_id, approval_id)
+        if decision.effect != "allow":
+            reason = decision.reason_for_agent.rstrip(". ")
+            raise ToolError(f"Blocked by policy: {reason}. Tell the user.")
+        return await self._forward(context, call_next, event_id)
+
+    async def _ask(self, context, call_next, event_id: int, approval_id: str):
+        timeout = float(os.environ.get("GUARD_APPROVAL_TIMEOUT", 60))
+        try:
+            status = await store.wait_for_approval(approval_id, timeout)
+            if status == "timeout":
+                # Close the approval first (needs outcome NULL), then record the outcome.
+                if not store.decide_approval(approval_id, "rejected", "timeout"):
+                    status = store.approval_status(approval_id)  # decided at the last moment
+        except BaseException:
+            # Cancelled or a store error: never leave a pending approval behind.
+            # Cleanup is best-effort and must not mask the original exception.
+            _best_effort(store.decide_approval, approval_id, "rejected", "timeout")
+            _best_effort(store.update_outcome, event_id, "timeout")
+            raise
+        if status == "approved":
+            store.update_outcome(event_id, "approved")
+            return await self._forward(context, call_next, event_id)
+        if status == "rejected":
+            store.update_outcome(event_id, "rejected")
+            raise ToolError("The owner rejected this action.")
+        store.update_outcome(event_id, "timeout")
+        raise ToolError(f"Pending owner approval (id {approval_id}). Tell the user and stop.")
+
+    async def _forward(self, context, call_next, event_id: int):
         try:
             result = await call_next(context)
         except BaseException:
