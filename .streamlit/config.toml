@@ -1,0 +1,5 @@
+# Shared look of the web app (app.py): AgentGuard orange for buttons and toggles, light theme
+# (the dashboard and onboarding cards are designed for a light background).
+[theme]
+base = "light"
+primaryColor = "#f26b1d"

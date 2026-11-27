@@ -41,11 +41,11 @@ through your rules, and rejects any rule set that does not behave the way the ow
 - id: unique lowercase kebab-case.
 - category: one of payment | email_send | read | bulk_export.
 - effect: allow | ask | deny.
-- explain: ONE short plain-Hebrew sentence the owner can read, describing only what THIS rule does. Mention \
-amounts only in payment rules, only the two limits from `limits`, and always in shekels (for example "תשלום עד \
-2,000 ₪ מתבצע אוטומטית"): never give a dollar amount without the shekel amount, and never mention a limit in an \
-email, read or export rule. Use the owner's own words, such as \
-"כתובות במשרד", "כתובות קבועות", "כתובות לא מוכרות". Write simple, correct Hebrew. No jargon, no rule ids.
+- explain: ONE short plain-English sentence the owner can read, describing only what THIS rule does. Mention \
+amounts only in payment rules, only the two limits from `limits`, and always in shekels (for example "Payments up \
+to ₪2,000 go through automatically"): never give a dollar amount without the shekel amount, and never mention a \
+limit in an email, read or export rule. Use the owner's own words, such as "office addresses", "fixed addresses", \
+"unknown addresses". Write simple, correct English. No jargon, no rule ids.
 - when: all listed conditions must hold; {} matches everything in the category. These are the ONLY operators:
   - amount_usd_lte (payment only): number in USD. The payment amount is <= this value.
   - daily_total_usd_lte (payment only): number in USD. Today's cumulative total INCLUDING this payment is <= this value.
@@ -96,7 +96,7 @@ TranslationError = LLMError  # the old name, kept for callers that imported it
 class TranslationResult:
     policy: dict
     source: Literal["llm", "llm_retry", "fallback"]
-    unsupported: list[str] = field(default_factory=list)  # what the Guard cannot enforce, in Hebrew, for the owner
+    unsupported: list[str] = field(default_factory=list)  # what the Guard cannot enforce, in plain English, for the owner
     errors: list[str] = field(default_factory=list)       # why a retry or the fallback happened (developer detail)
     # Only when source == "fallback": "no_credentials" | "auth_failed" | "api_error" | "invalid_output"
     fallback_reason: str | None = None

@@ -57,12 +57,13 @@ def _calls(answers: dict):
     return calls
 
 
-_AMOUNT = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*₪|\$\s*(\d[\d,]*(?:\.\d+)?)")
+# ₪2,000 / 2,000 ₪ / $540
+_AMOUNT = re.compile(r"₪\s*(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s*₪|\$\s*(\d[\d,]*(?:\.\d+)?)")
 MAX_EXPLAIN_CHARS = 200
 
 
 def _amounts(text: str) -> set[str]:
-    return {(a or b).replace(",", "") for a, b in _AMOUNT.findall(text)}
+    return {"".join(groups).replace(",", "") for groups in _AMOUNT.findall(text)}
 
 
 def explain_problems(policy: dict, answers: dict | None = None) -> list[str]:
@@ -70,7 +71,7 @@ def explain_problems(policy: dict, answers: dict | None = None) -> list[str]:
 
     Decisions are checked by semantic_problems; here: only payment rules may mention amounts, and only the
     amounts that rule is about (those in the reference explanation of the same rule id, or else either
-    limit, in shekels or USD); the text must be short Hebrew. Grammar and wording cannot be checked by code.
+    limit, in shekels or USD); the text must be short English. Grammar and wording cannot be checked by code.
     """
     lim = limits()
     both = {str(lim[k]) for k in ("auto_ils", "auto_usd", "daily_ils", "daily_usd")}
@@ -89,8 +90,8 @@ def explain_problems(policy: dict, answers: dict | None = None) -> list[str]:
         elif rule["category"] == "payment" and "$" in text and "₪" not in text:
             problems.append(f"rule '{rule_id}': write amounts in shekels (₪), the owner's currency; a dollar "
                             "amount may only follow the shekel amount, in parentheses")
-        if not re.search("[א-ת]", text):
-            problems.append(f"rule '{rule_id}': explain must be in Hebrew")
+        if re.search("[א-ת]", text) or not re.search("[A-Za-z]", text):
+            problems.append(f"rule '{rule_id}': explain must be in English")
         if len(text) > MAX_EXPLAIN_CHARS:
             problems.append(f"rule '{rule_id}': explain must be one short sentence")
     return problems

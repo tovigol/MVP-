@@ -11,12 +11,11 @@ Read-only: every read goes through shared.store (no raw SQL, no writes).
 Data source: the real guard.db by default. GUARD_DB (tests only) points elsewhere,
 and then the screen shows a "Test data" banner so it is never mistaken for real activity.
 
-Run from the repo root:
-    streamlit run dashboard/app.py --server.port 8501
+The second page of the web app (the onboarding questions come first). Run from the repo root:
+    streamlit run app.py --server.port 8000
 """
 from __future__ import annotations
 
-import html
 import os
 import sys
 from datetime import datetime
@@ -30,7 +29,7 @@ if str(REPO_ROOT) not in sys.path:
 import streamlit as st
 
 from dashboard import charts, data
-from shared import policy, store
+from shared import policy, store, theme
 
 try:
     from dotenv import load_dotenv
@@ -42,7 +41,7 @@ REFRESH_SECONDS = 2
 COUNTER_WINDOW = 500  # events read for today's numbers (enough for a demo day)
 RECENT_BLOCKS = 4
 DEFAULT_ROWS = 100
-BRAND = "#f26b1d"
+BRAND = theme.BRAND
 SLACK_CHANNEL = os.environ.get("SLACK_APPROVAL_CHANNEL", "").strip()
 SLACK_URL = f"https://slack.com/app_redirect?channel={SLACK_CHANNEL}" if SLACK_CHANNEL else ""
 
@@ -53,16 +52,9 @@ st.set_page_config(page_title="AgentGuard", page_icon=":material/shield:", layou
 
 st.markdown(f"""
 <style>
-.stApp {{ background: #f5f6fa; }}
+{theme.BASE_CSS}
 .block-container {{ padding-top: 2.2rem; max-width: 1320px; }}
-[data-testid="stSidebar"] {{ background: #ffffff; border-right: 1px solid #eef0f4; }}
-header[data-testid="stHeader"] {{ background: transparent; }}
 
-.ag-card, [class*="st-key-card"] {{
-  background: #fff; border: 1px solid #eef0f4; border-radius: 16px;
-  box-shadow: 0 1px 3px rgba(16,24,40,.06), 0 1px 2px rgba(16,24,40,.04);
-  padding: 18px 20px; margin-bottom: 16px;
-}}
 /* Cards side by side share one height (like the reference layouts). */
 [data-testid="stHorizontalBlock"]:has(.ag-card) {{ align-items: stretch; }}
 [data-testid="stColumn"]:has(.ag-card) > [data-testid="stVerticalBlock"],
@@ -71,54 +63,15 @@ header[data-testid="stHeader"] {{ background: transparent; }}
 [data-testid="stColumn"]:has(.ag-card) .stMarkdown > div,
 [data-testid="stColumn"]:has(.ag-card) [data-testid="stMarkdownContainer"] {{ height: 100%; }}
 [data-testid="stColumn"] .ag-card {{ height: calc(100% - 16px); box-sizing: border-box; }}
-.ag-card-title {{ font-size: 16px; font-weight: 650; color: #101828; margin-bottom: 2px; }}
-.ag-card-sub {{ font-size: 13px; color: #667085; margin-bottom: 12px; }}
-.ag-empty {{ font-size: 14px; color: #98a2b3; padding: 18px 0 8px; }}
-
-.ag-top {{ display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap;
-           gap: 12px; margin-bottom: 18px; }}
-.ag-hello {{ font-size: 28px; font-weight: 700; color: #101828; line-height: 1.2; }}
-.ag-hello-sub {{ font-size: 14px; color: #667085; margin-top: 4px; }}
-.ag-pills {{ display: flex; gap: 8px; flex-wrap: wrap; }}
-.ag-pill {{ display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 10px;
-            font-size: 13px; font-weight: 600; background: #fff; border: 1px solid #eef0f4; color: #344054; }}
-
-.ag-kpis {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin-bottom: 16px; }}
-@media (max-width: 1000px) {{ .ag-kpis {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
-.ag-kpi-head {{ display: flex; align-items: center; gap: 10px; font-size: 14px; color: #475467; font-weight: 500; }}
-.ag-icon {{ width: 34px; height: 34px; border-radius: 10px; display: inline-flex; align-items: center;
-            justify-content: center; font-size: 17px; }}
-.ag-kpi-body {{ display: flex; justify-content: space-between; align-items: flex-end; margin-top: 14px; }}
-.ag-kpi-value {{ font-size: 30px; font-weight: 700; color: #101828; line-height: 1.1; }}
-.ag-kpi-sub {{ font-size: 13px; color: #667085; margin-top: 4px; }}
 
 .ag-legend {{ display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; color: #475467; }}
-.ag-dot {{ display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }}
 .ag-donut {{ display: flex; align-items: center; gap: 18px; flex-wrap: wrap; justify-content: center; }}
 .ag-donut-legend {{ flex: 1; min-width: 160px; }}
 .ag-donut-row {{ display: flex; justify-content: space-between; font-size: 14px; color: #344054; padding: 7px 0;
                  border-bottom: 1px dashed #eef0f4; }}
-
-.ag-item {{ padding: 12px 0; border-bottom: 1px solid #f2f4f7; }}
-.ag-item:last-child {{ border-bottom: 0; }}
-.ag-item-title {{ font-size: 14px; font-weight: 600; color: #101828; }}
-.ag-item-meta {{ font-size: 12.5px; color: #667085; margin-top: 2px; }}
-.ag-badge {{ font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; margin-left: 6px; }}
 .ag-track {{ height: 6px; border-radius: 3px; margin-top: 8px; overflow: hidden; }}
 .ag-track span {{ display: block; height: 100%; border-radius: 3px; }}
-.ag-btn {{ display: inline-block; margin-top: 10px; padding: 7px 14px; border-radius: 9px; background: {BRAND};
-           color: #fff !important; font-size: 13px; font-weight: 600; text-decoration: none !important; }}
 .ag-bar-row {{ display: flex; justify-content: space-between; font-size: 14px; color: #344054; margin-top: 12px; }}
-
-/* Material Symbols (Rounded). Streamlit ships this font, so it works offline too. */
-.ag-mi {{ font-family: "Material Symbols Rounded"; font-weight: normal; font-style: normal; font-size: 1.2em;
-          line-height: 1; letter-spacing: normal; text-transform: none; white-space: nowrap; direction: ltr;
-          display: inline-block; vertical-align: -0.22em; font-feature-settings: "liga";
-          -webkit-font-smoothing: antialiased; user-select: none; }}
-.ag-icon .ag-mi {{ font-size: 21px; vertical-align: 0; }}
-.ag-pill .ag-mi {{ font-size: 17px; vertical-align: 0; }}
-.ag-card-title .ag-mi, .ag-empty .ag-mi {{ margin-right: 4px; }}
-.ag-btn .ag-mi {{ font-size: 16px; margin-left: 4px; vertical-align: -0.2em; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -131,22 +84,14 @@ def load_policy_safe() -> dict:
         return {}
 
 
-def esc(text) -> str:
-    return html.escape(str(text))
-
-
-def mi(name: str, color: str | None = None) -> str:
-    """A Material Symbols icon for the raw-HTML cards (':material/name:' only works in Streamlit markdown)."""
-    style = f' style="color:{color}"' if color else ""
-    return f'<span class="ag-mi" aria-hidden="true"{style}>{esc(name)}</span>'
+esc = theme.esc
+mi = theme.mi
 
 
 # --- sidebar (changing these reruns the whole page) -----------------------------
 
 with st.sidebar:
-    st.markdown(f'<div style="font-size:22px;font-weight:700;color:#101828">{mi("shield", BRAND)} Agent<span style="color:{BRAND}">'
-                f'Guard</span></div><div style="font-size:12px;color:#667085;margin-bottom:18px">'
-                f'Your AI assistant\'s safety guard</div>', unsafe_allow_html=True)
+    st.markdown(theme.logo_html("Your AI assistant's safety guard"), unsafe_allow_html=True)
     st.subheader("Settings")
     paused = st.toggle("Pause live updates", value=False, help="Freeze the screen, e.g. while presenting")
     show_tech = st.toggle("Show technical details", value=False,
@@ -360,6 +305,13 @@ def render_activity(events: list[dict]) -> None:
 
 if st.session_state.get("row_limit_auto", True):
     row_limit = DEFAULT_ROWS  # sidebar max may be stale between full reruns; show the newest 100
+
+# Outside the live fragment, so it isn't redrawn every 2s.
+if st.button("Back to the questions", icon=":material/edit_note:", key="back_to_questions"):
+    st.session_state["step"] = "questions"  # the answers stay in raw_answers, so the form opens filled in
+    st.switch_page("onboarding/app.py")
+if st.session_state.pop("just_saved", False):
+    st.toast("Rules saved. The guard uses them from the next action.", icon=":material/task_alt:")
 
 
 @st.fragment(run_every=None if paused else REFRESH_SECONDS)
