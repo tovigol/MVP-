@@ -1,0 +1,75 @@
+:root {
+  /* Color tokens */
+  --bg: #0a0c10;
+  --panel: #12151c;
+  --panel-raised: #171b24;
+  --border: #232838;
+  --text-primary: #e7eaf0;
+  --text-muted: #7a8296;
+  --text-faint: #4b5164;
+
+  --status-pending: #f0a63a;
+  --status-pending-bg: rgba(240, 166, 58, 0.12);
+  --status-completed: #2fd980;
+  --status-completed-bg: rgba(47, 217, 128, 0.12);
+  --status-failed: #ff5c6c;
+  --status-failed-bg: rgba(255, 92, 108, 0.12);
+  --live: #4fa8ff;
+
+  /* Type */
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SF Mono', monospace;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  background-image: radial-gradient(circle at 15% 0%, rgba(79, 168, 255, 0.06), transparent 45%);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+}
+
+a {
+  color: inherit;
+}
+
+::selection {
+  background: rgba(79, 168, 255, 0.25);
+}
+
+:focus-visible {
+  outline: 2px solid var(--live);
+  outline-offset: 2px;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

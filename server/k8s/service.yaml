@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: transaction-monitor-api
+  labels:
+    app: transaction-monitor-api
+spec:
+  type: ClusterIP
+  selector:
+    app: transaction-monitor-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+  # A WebSocket connection itself is a single persistent TCP connection to
+  # whichever pod handled it, so it doesn't need stickiness once established.
+  # SignalR's initial /negotiate handshake (and any fallback transport, e.g.
+  # long polling) issues separate HTTP requests that DO need to land on the
+  # same pod. ClientIP affinity covers that without requiring a smarter
+  # ingress; swap for an ingress-level cookie-based affinity if clients sit
+  # behind a shared NAT/proxy that would make ClientIP too coarse.
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 3600
