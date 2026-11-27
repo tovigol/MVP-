@@ -1,9 +1,10 @@
 """Unit tests for the policy engine. No network, no LLM. Run: python -m pytest -q"""
 import copy
+import json
 
 import pytest
 
-from shared.policy import evaluate, normalize, log_fields
+from shared.policy import OPERATORS, evaluate, log_fields, normalize, operator, when_schema
 
 POLICY = {
     "business": "yossi-bakery",
@@ -189,3 +190,28 @@ def test_log_fields_never_raises():
     assert log_fields(PAY, {"amount": 8000}, REGISTRY) == ("payment", 80.0)
     assert log_fields(PAY, {"amount": "abc"}, REGISTRY) == ("payment", None)
     assert log_fields("nope", None, REGISTRY) == ("unknown", None)
+
+
+# --- operator table -------------------------------------------------------------
+
+def test_operator_table_has_spec_operators():
+    assert set(OPERATORS) == {"amount_usd_lte", "daily_total_usd_lte",
+                              "all_recipients_in", "any_recipient_in"}
+
+
+def test_when_schema_matches_table():
+    schema = when_schema()
+    assert set(schema["properties"]) == set(OPERATORS)
+    assert schema["additionalProperties"] is False
+    json.dumps(schema)  # must be serializable to send to Claude
+
+
+def test_policy_fixture_uses_only_schema_operators():
+    allowed = set(when_schema()["properties"])
+    for rule in POLICY["rules"]:
+        assert set(rule["when"]) <= allowed, rule["id"]
+
+
+def test_operator_registered_twice_raises():
+    with pytest.raises(ValueError):
+        operator("amount_usd_lte", {"type": "number"})(lambda value, ctx: True)

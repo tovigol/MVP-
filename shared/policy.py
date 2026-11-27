@@ -7,11 +7,10 @@ except load_policy() / load_registry().
 Rules are checked top to bottom; the first rule whose category matches and whose
 `when` conditions all hold decides. No match -> policy["default_by_risk"][risk].
 
-Supported `when` operators (any other operator -> deny):
-  amount_usd_lte:      number                         amount_usd <= value
-  daily_total_usd_lte: number                         daily_total_usd + amount_usd <= value
-  all_recipients_in:   [domain] | "company_domains"   every recipient's domain is listed
-  any_recipient_in:    [domain] | "company_domains"   at least one recipient's domain is listed
+`when` operators live in the OPERATORS table (see "operators" below); any other
+operator -> deny. To add one: write a function (value, ctx) -> bool, decorate it
+with @operator(name, value_schema), and add test cases. when_schema() exports the
+same table as JSON Schema for onboarding, so Claude can only emit known operators.
 A condition whose fact is missing (no amount, no recipients) is false.
 
 Fail-closed:
@@ -26,13 +25,12 @@ import re
 from dataclasses import dataclass
 from email.utils import getaddresses
 from pathlib import Path
-from typing import Literal
+from typing import Any, Callable, Literal
 
 BASE_DIR = Path(__file__).resolve().parent
 POLICY_PATH = BASE_DIR / "policy.json"
 REGISTRY_PATH = BASE_DIR / "registry.json"
 
-OPERATORS = {"amount_usd_lte", "daily_total_usd_lte", "all_recipients_in", "any_recipient_in"}
 UNIT_DIVISORS = {"cents": 100, "usd": 1}
 EFFECTS = ("allow", "deny", "ask")
 RISKS = ("read", "write", "destructive")
@@ -144,25 +142,85 @@ def _domains(value, policy: dict) -> set[str]:
     return {d.strip().lower() for d in value}
 
 
-def _holds(op: str, value, facts: dict, policy: dict, daily_total_usd: float) -> bool:
-    amount, recipients = facts["amount_usd"], facts["recipients"]
-    if op == "amount_usd_lte":
-        return amount is not None and amount <= _number(value)
-    if op == "daily_total_usd_lte":
-        return amount is not None and daily_total_usd + amount <= _number(value)
-    domains = _domains(value, policy)
+# --- operators ----------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Context:
+    """Everything an operator may look at. Operators must not touch disk, DB or clock."""
+    facts: dict
+    policy: dict
+    daily_total_usd: float
+
+
+@dataclass(frozen=True)
+class Operator:
+    check: Callable[[Any, Context], bool]   # (value from `when`, ctx) -> holds?
+    value_schema: dict                       # JSON Schema of the value, for onboarding
+
+
+OPERATORS: dict[str, Operator] = {}
+
+_NUMBER = {"type": "number", "minimum": 0}
+_DOMAINS = {"anyOf": [{"type": "array", "items": {"type": "string"}},
+                      {"const": "company_domains"}]}
+
+
+def operator(name: str, value_schema: dict):
+    """Registers a `when` operator under `name`."""
+    def register(check: Callable[[Any, Context], bool]):
+        if name in OPERATORS:
+            raise ValueError(f"operator {name!r} registered twice")
+        OPERATORS[name] = Operator(check, value_schema)
+        return check
+    return register
+
+
+@operator("amount_usd_lte", _NUMBER)
+def _amount_usd_lte(value, ctx: Context) -> bool:
+    """amount_usd <= value"""
+    amount = ctx.facts["amount_usd"]
+    return amount is not None and amount <= _number(value)
+
+
+@operator("daily_total_usd_lte", _NUMBER)
+def _daily_total_usd_lte(value, ctx: Context) -> bool:
+    """today's total so far + amount_usd <= value"""
+    amount = ctx.facts["amount_usd"]
+    return amount is not None and ctx.daily_total_usd + amount <= _number(value)
+
+
+def _recipient_domains_check(value, ctx: Context, check) -> bool:
+    domains = _domains(value, ctx.policy)  # validated even when there are no recipients
+    recipients = ctx.facts["recipients"]
     if not recipients:  # an empty recipient list never matches
         return False
-    check = all if op == "all_recipients_in" else any
     return check(_domain(r) in domains for r in recipients)
 
 
-def _matches(rule: dict, facts: dict, policy: dict, daily_total_usd: float) -> bool:
+@operator("all_recipients_in", _DOMAINS)
+def _all_recipients_in(value, ctx: Context) -> bool:
+    """every recipient's domain is listed"""
+    return _recipient_domains_check(value, ctx, all)
+
+
+@operator("any_recipient_in", _DOMAINS)
+def _any_recipient_in(value, ctx: Context) -> bool:
+    """at least one recipient's domain is listed"""
+    return _recipient_domains_check(value, ctx, any)
+
+
+def when_schema() -> dict:
+    """JSON Schema for a rule's `when` object, built from OPERATORS."""
+    return {"type": "object", "additionalProperties": False,
+            "properties": {name: op.value_schema for name, op in OPERATORS.items()}}
+
+
+def _matches(rule: dict, ctx: Context) -> bool:
     when = rule.get("when", {})
-    unknown = set(when) - OPERATORS  # check all operators first, so order in `when` can't hide a typo
+    unknown = set(when) - OPERATORS.keys()  # check all operators first, so order in `when` can't hide a typo
     if unknown:
         raise ValueError(f"unsupported operator in rule {rule.get('id')}: {sorted(unknown)}")
-    return all(_holds(op, v, facts, policy, daily_total_usd) for op, v in when.items())
+    return all(OPERATORS[op].check(v, ctx) for op, v in when.items())
 
 
 def _decide(effect: str, rule_id: str | None, reason: str, risk: str) -> Decision:
@@ -179,8 +237,9 @@ def _evaluate(tool_name, args, policy, registry, daily_total_usd) -> Decision:
     except ValueError as e:
         return Decision("deny", None, f"Invalid arguments: {e}",
                         f"The arguments could not be checked ({e}). " + AGENT_MESSAGES["deny"])
+    ctx = Context(facts, policy, daily_total_usd)
     for rule in policy["rules"]:
-        if rule["category"] == facts["category"] and _matches(rule, facts, policy, daily_total_usd):
+        if rule["category"] == facts["category"] and _matches(rule, ctx):
             reason = rule.get("explain") or f"Matched rule {rule['id']}"
             return _decide(rule["effect"], rule["id"], reason, facts["risk"])
     risk = facts["risk"]
