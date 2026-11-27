@@ -2,7 +2,9 @@
 
 Flow:
   1. Every second, read pending approvals from guard.db and post a message
-     with Approve / Don't allow buttons to the approvals channel.
+     with Approve / Don't allow / Always allow buttons to the approvals channel.
+     "Always allow" also adds a category-wide allow rule to shared/policy.json
+     (see slack_bot/always_allow.py).
   2. A click updates the approvals row (shared.store.decide_approval) and
      replaces the buttons with the result.
   3. If nobody answers within 60 seconds, the Gateway marks the approval
@@ -32,6 +34,7 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from shared import store
+from slack_bot import always_allow
 
 load_dotenv(REPO_ROOT / ".env")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -50,6 +53,7 @@ HEADERS = {
     "pending": "🟡 Your AI assistant is asking for permission",
     "destructive": "🔴 Your AI assistant wants to do something that can't be undone",
     "approved": "✅ You approved this",
+    "always": "♾️ You approved this - and said always allow",
     "rejected": "🚫 You blocked this",
     "expired": "⏱️ Expired - nothing was done",
 }
@@ -171,8 +175,9 @@ def _context(text: str) -> dict:
 
 
 def build_blocks(item: dict, state: str = "pending", actor: str | None = None) -> list[dict]:
-    """Block Kit layout for one approval. state: pending | approved | rejected | expired."""
+    """Block Kit layout for one approval. state: pending | approved | always | rejected | expired."""
     risky = state == "pending" and _is_destructive(item)
+    offer_always = state == "pending" and always_allow.can_always_allow(item)
     header = HEADERS["destructive"] if risky else HEADERS[state]
 
     blocks: list[dict] = [
@@ -186,24 +191,39 @@ def build_blocks(item: dict, state: str = "pending", actor: str | None = None) -
             "*What happens next?*\n"
             "• *Approve* - the assistant does it right away.\n"
             "• *Don't allow* - the assistant won't do it and will tell you it was blocked.\n"
-            f"• No answer within *{TIMEOUT_MINUTES_TEXT}* - nothing happens."
+            + (f"• *Always allow* - approve now, and from now on let the assistant "
+               f"{always_allow.scope_text(item.get('category'))} without asking you.\n"
+               if offer_always else "")
+            + f"• No answer within *{TIMEOUT_MINUTES_TEXT}* - nothing happens."
         ))
-        blocks.append({
-            "type": "actions",
-            "block_id": "approval_actions",
-            "elements": [
-                {"type": "button", "action_id": "approve", "style": "primary",
-                 "text": {"type": "plain_text", "text": "✅ Approve", "emoji": True},
-                 "value": item["approval_id"]},
-                {"type": "button", "action_id": "reject", "style": "danger",
-                 "text": {"type": "plain_text", "text": "🚫 Don't allow", "emoji": True},
-                 "value": item["approval_id"]},
-            ],
-        })
+        elements = [
+            {"type": "button", "action_id": "approve", "style": "primary",
+             "text": {"type": "plain_text", "text": "✅ Approve", "emoji": True},
+             "value": item["approval_id"]},
+            {"type": "button", "action_id": "reject", "style": "danger",
+             "text": {"type": "plain_text", "text": "🚫 Don't allow", "emoji": True},
+             "value": item["approval_id"]},
+        ]
+        if offer_always:
+            elements.append(always_allow_button(item))
+        blocks.append({"type": "actions", "block_id": "approval_actions", "elements": elements})
         blocks.append(_context(f"Asked at {_hm(item.get('ts'))} · please answer within {TIMEOUT_MINUTES_TEXT}"))
     elif state == "approved":
         who = actor or _esc(item.get("decided_by") or "someone")
         blocks.append(_section(f"{who} approved this at {_hm(item.get('decided_at'))}. The assistant went ahead."))
+    elif state == "always":
+        who = actor or _esc(item.get("decided_by") or "someone")
+        category = item.get("category")
+        blocks.append(_section(
+            f"{who} approved this at {_hm(item.get('decided_at'))}. The assistant went ahead.\n"
+            f"*From now on* your assistant may {always_allow.scope_text(category)} "
+            "without asking you."
+        ))
+        blocks.append(_context(
+            f"This covers every tool of this kind, not only `{_esc(item['tool'])}`. "
+            f"To undo it, run onboarding again or remove rule `{always_allow.rule_id_for(category)}` "
+            "from policy.json."
+        ))
     elif state == "rejected":
         who = actor or _esc(item.get("decided_by") or "someone")
         blocks.append(_section(f"{who} blocked this at {_hm(item.get('decided_at'))}. The assistant did *not* do it."))
@@ -224,6 +244,39 @@ def build_blocks(item: dict, state: str = "pending", actor: str | None = None) -
     return blocks
 
 
+def always_allow_button(item: dict) -> dict:
+    """Third button. Slack shows the confirm dialog first, so the owner sees the scope."""
+    category = item.get("category")
+    return {
+        "type": "button", "action_id": "always_allow",
+        "text": {"type": "plain_text", "text": "♾️ Always allow", "emoji": True},
+        "value": item["approval_id"],
+        # Slack shows confirm dialogs as plain text (no *bold*), so no markdown here.
+        "confirm": {
+            "title": {"type": "plain_text",
+                      "text": f"Always allow {always_allow.category_noun(category)}?"[:100]},
+            "text": {"type": "plain_text", "text": (
+                "✅ This request is approved right away.\n\n"
+                f"♾️ From now on, your assistant may {always_allow.scope_text(category, plain=True)} "
+                "without asking you.\n\n"
+                "This covers every tool of this kind, not just this one. "
+                "You can turn it off later by running onboarding again."
+            )[:300], "emoji": True},
+            "confirm": {"type": "plain_text", "text": "Yes, always allow"},
+            "deny": {"type": "plain_text", "text": "Cancel"},
+            "style": "danger",
+        },
+    }
+
+
+def always_allow_notice(row: dict, user_id: str) -> str:
+    """Channel message so everyone sees that a permanent rule was added."""
+    category = row.get("category")
+    return (f"♾️ <@{user_id}> turned on *always allow*: from now on the assistant may "
+            f"{always_allow.scope_text(category)} without asking. "
+            f"(rule `{always_allow.rule_id_for(category)}` added to policy.json)")
+
+
 def fallback_text(item: dict, state: str = "pending") -> str:
     """Plain text for notifications and clients that cannot render blocks."""
     sentence = summary_sentence(item).replace("*", "").replace("`", "")
@@ -235,7 +288,7 @@ def fallback_text(item: dict, state: str = "pending") -> str:
 def create_app() -> App:
     app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
-    def decide(body: dict, client, status: str) -> None:
+    def decide(body: dict, client, status: str, always: bool = False) -> None:
         approval_id = body["actions"][0]["value"]
         user = body["user"]
         user_name = user.get("username") or user.get("name") or user["id"]
@@ -248,8 +301,17 @@ def create_app() -> App:
         if row is None:
             return
 
+        saved_error = None
+        if applied and always:
+            try:
+                always_allow.add_always_allow(row.get("category"), row["tool"], user_name)
+            except Exception as exc:  # the one-time approval still stands
+                log.exception("could not save always-allow rule for %s", approval_id)
+                saved_error = str(exc)
+
         if applied:
-            state, actor = status, f"<@{user['id']}>"
+            state = "always" if always and saved_error is None else status
+            actor = f"<@{user['id']}>"
         else:
             # decide_approval returned False: someone else clicked first, or it expired.
             state, actor = final_state(row) or "expired", None
@@ -259,12 +321,23 @@ def create_app() -> App:
         if not applied:
             client.chat_postEphemeral(channel=channel, user=user["id"],
                                       text=ALREADY_HANDLED_TEXT[state])
+        elif saved_error is not None:
+            client.chat_postEphemeral(channel=channel, user=user["id"], text=(
+                "Approved this one time, but I couldn't save the *always allow* rule, "
+                f"so the assistant will still ask next time. ({saved_error})"))
+        elif state == "always":
+            client.chat_postMessage(channel=channel, text=always_allow_notice(row, user["id"]))
         log.info("approval %s -> %s by %s (applied=%s)", approval_id, state, user_name, applied)
 
     @app.action("approve")
     def on_approve(ack, body, client):
         ack()
         decide(body, client, "approved")
+
+    @app.action("always_allow")
+    def on_always_allow(ack, body, client):
+        ack()
+        decide(body, client, "approved", always=True)
 
     @app.action("reject")
     def on_reject(ack, body, client):
