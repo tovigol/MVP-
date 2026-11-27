@@ -22,7 +22,7 @@ from fastmcp.server import create_proxy
 from fastmcp.server.dependencies import get_http_headers
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from shared import store
-from shared.policy import Decision, load_registry, log_fields
+from shared.policy import Decision, evaluate, load_policy, load_registry, log_fields
 
 UPSTREAMS = {
     "mcpServers": {
@@ -59,14 +59,26 @@ class Guard(Middleware):
         tool = context.message.name
         args = context.message.arguments or {}
         agent = get_http_headers(include_all=True).get("x-agent") or "agent"
-        # Fail closed: nothing is forwarded unless the event row was written.
-        # No await in this block (Task 3 adds the daily total + decision here).
+        # Fail closed. No await from here through log_event: one asyncio loop
+        # stays atomic, so concurrent payments cannot both pass the daily limit.
+        category = amount_usd = None
         try:
-            category, amount_usd = log_fields(tool, args, load_registry())
-            decision = Decision("allow", None, "logging only", "")
+            registry = load_registry()
+            category, amount_usd = log_fields(tool, args, registry)
+            decision = evaluate(tool, args, load_policy(), registry,
+                                store.daily_payment_total())
+        except Exception as exc:
+            decision = Decision("deny", None, f"Check failed: {exc}", "Policy check failed")
+        try:
             event_id = store.log_event(tool, args, decision, category, amount_usd, agent)
         except Exception as exc:
             raise ToolError("Denied: guard could not record this call") from exc
+        if decision.effect != "allow":
+            if decision.effect == "ask":
+                # Task 4 replaces this with the approval flow.
+                store.update_outcome(event_id, "blocked")
+            reason = decision.reason_for_agent.rstrip(". ")
+            raise ToolError(f"Blocked by policy: {reason}. Tell the user.")
         try:
             result = await call_next(context)
         except BaseException:
