@@ -1,10 +1,9 @@
 # stripe_server.py
 import os
 import stripe
-from dotenv import load_dotenv
 from fastmcp import FastMCP
 
-load_dotenv()
+# Keys come from the gateway's per-server env (see build_upstreams in gateway.py).
 
 mcp = FastMCP("stripe")
 
