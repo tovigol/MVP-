@@ -1,0 +1,11 @@
+# Dashboard theme: light card layout with an orange brand accent (buttons, chips).
+[theme]
+base = "light"
+primaryColor = "#f26b1d"
+backgroundColor = "#f5f6fa"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#101828"
+
+[client]
+# Hide the developer "Deploy" toolbar from the owner's screen.
+toolbarMode = "minimal"
