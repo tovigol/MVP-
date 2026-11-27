@@ -9,8 +9,8 @@ How we differ: MCP gateways for large enterprises already exist (Traefik, Gravit
 2. MVP goals
 After 6 hours we show a real Claude agent working against real Stripe and real email through the guard, with every decision visible on a live dashboard.
 Must have (no demo without these):
-1.  Onboarding: questions and free-text answers that Claude turns into Policy JSON, a checklist screen to confirm, and an "Activate" button that shows the URL and paste instructions.
-2.  Gateway: an MCP proxy that forwards allowed calls unchanged and blocks denied calls with an explanation for the agent. When a new server is connected, Claude classifies its tools automatically.
+1.  Onboarding: questions and free-text answers that an LLM (Azure OpenAI) turns into Policy JSON, a checklist screen to confirm, and an "Activate" button that shows the URL and paste instructions.
+2.  Gateway: an MCP proxy that forwards allowed calls unchanged and blocks denied calls with an explanation for the agent. When a new server is connected, the LLM (Azure OpenAI) classifies its tools automatically.
 3.  A deterministic rules engine with allow / deny / ask, including a cumulative daily limit.
 4.  Approval in Slack with buttons, after which the agent continues automatically.
 5.  A live log dashboard.
@@ -49,7 +49,7 @@ Tool name, arguments, cumulative state
 Decision(effect, reason, rule_id)
 Person 1
 Tool Registry
-Claude classifies each tool into a category, risk level and field names; a person reviews the result
+An LLM (Azure OpenAI) classifies each tool into a category, risk level and field names; a person reviews the result
 list_tools output from the servers
 registry.json
 Person 3
@@ -64,7 +64,7 @@ Prompts from the script
 Tool calls
 Person 2
 Onboarding
-Web app with questions, rule translation via Claude API, and a checklist to confirm
+Web app with questions, rule translation via Azure OpenAI, and a checklist to confirm
 Owner's answers
 policy.json and an "Activate" screen
 Person 3
@@ -100,7 +100,7 @@ Onboarding writes the file; the Gateway re-reads it on every call, so a rule cha
 }
 Operators supported in when for the MVP: amount_usd_lte, daily_total_usd_lte, all_recipients_in, any_recipient_in. We add no more during the hackathon.
 5.2 Tool Registry (registry.json)
-Person 2 runs list_tools on each server in the first hour, and Claude classifies the output and generates this file (Person 3's classify_tools.py script). One of us reviews the result before activation.
+Person 2 runs list_tools on each server in the first hour, and the LLM (Azure OpenAI) classifies the output and generates this file (Person 3's classify_tools.py script). One of us reviews the result before activation.
 {
   "stripe_create_payment_link": {"category": "payment", "risk": "write", "amount_field": "amount", "amount_unit": "cents", "source": "pack"},
   "stripe_list_customers": {"category": "read", "risk": "read", "source": "claude"},
@@ -109,7 +109,7 @@ Person 2 runs list_tools on each server in the first hour, and Claude classifies
   "crm_export_all": {"category": "bulk_export", "risk": "write", "source": "reviewed"}
 }
 The tool names here are examples. The real Stripe names, and the prefix FastMCP adds per server, come from list_tools.
-How Claude classifies a tool: it gets the tool's name, description, parameter schema and MCP annotations (readOnlyHint, destructiveHint), and returns category, risk and a field mapping. MCP annotations are hints only, and the spec says not to trust them from an untrusted server. When there is a conflict, for example a tool marked read-only with a send_to parameter, the tool is classified as write. The source field shows where the classification came from: a ready-made pack, Claude, or a person who reviewed it.
+How the LLM (Azure OpenAI) classifies a tool: it gets the tool's name, description, parameter schema and MCP annotations (readOnlyHint, destructiveHint), and returns category, risk and a field mapping. MCP annotations are hints only, and the spec says not to trust them from an untrusted server. When there is a conflict, for example a tool marked read-only with a send_to parameter, the tool is classified as write. The source field shows where the classification came from: a ready-made pack, Claude, or a person who reviewed it.
 Defaults by risk (when no rule matched):
 risk
 Default
@@ -223,7 +223,7 @@ The script prints a score, for example "10/10 blocked as expected". We show that
 7.3 Bypass detector (extra, Person 1 or 4). Every 60 seconds, pull the latest events from Stripe and compare them with events. A Stripe action with no matching log row triggers a Slack alert. In the demo we trigger it on purpose with a manual payment in the Stripe dashboard.
 8. Demo script
 Three minutes on "Yossi's Bakery". On screen: three windows side by side, the agent, the dashboard and Slack.
-1.  Onboarding (40 seconds). Yossi answers 4 questions and types a free sentence: "Don't pay anyone more than a hundred dollars without asking me." Claude shows a checklist in plain language, Yossi clicks "Activate" and gets a URL. Right after, we connect a new MCP server live, and Claude classifies its tools in front of the judges.
+1.  Onboarding (40 seconds). Yossi answers 4 questions and types a free sentence: "Don't pay anyone more than a hundred dollars without asking me." The LLM (Azure OpenAI) turns it into a checklist in plain language, Yossi clicks "Activate" and gets a URL. Right after, we connect a new MCP server live, and the LLM classifies its tools in front of the judges.
 2.  Allowed action. "Pay the flour supplier $80." It goes through, a green row appears on the dashboard, and the payment shows up in the Stripe sandbox.
 3.  Block. "Pay the equipment supplier $5,000." Blocked, and the agent explains why to the user without crashing.
 4.  Approval. "Send a quote to a new customer at gmail." A Slack message arrives, a judge clicks Approve, and the email lands on a phone in the room.
@@ -265,8 +265,8 @@ Person 2: Tools, agent and demo
 [ ] Extra: connect the same URL to n8n or Claude Code
 Person 3: Onboarding and AI
 [ ] A list of 6–8 questions for the business (amounts, domains, regular suppliers, what is always forbidden) (by 0:45)
-[ ] A Claude API call that turns answers into policy.json per the contract in 5.1, with output validation (by 2:00)
-[ ] classify_tools.py script: Claude classifies the list_tools output into registry.json (category, risk and fields), plus a short screen to approve the classification (by 2:30)
+[ ] An Azure OpenAI call that turns answers into policy.json per the contract in 5.1, with output validation (by 2:00)
+[ ] classify_tools.py script: the LLM (Azure OpenAI) classifies the list_tools output into registry.json (category, risk and fields), plus a short screen to approve the classification (by 2:30)
 [ ] Checklist screen showing each rule in plain language (explain) with editable numbers (by 2:45)
 [ ] "Activate" screen: URL, token and paste snippets for Claude, Claude Code, the Agent SDK and n8n (by 3:15)
 [ ] Extra: rule suggestions from the approvals in events
@@ -287,7 +287,7 @@ claude-agent-sdk
 Onboarding and dashboard
 FastAPI with HTMX, or Streamlit for whoever prefers speed
 Rule translation
-anthropic SDK with structured JSON output
+openai SDK (AzureOpenAI client, model deployed on Azure) with structured JSON output
 Slack
 slack_bolt in Socket Mode, no public URL
 Email
@@ -295,7 +295,8 @@ Resend API or Gmail SMTP with an App Password
 Data
 SQLite (guard.db)
 Setup in the first 30 minutes
-[ ] Anthropic API key
+[ ] Azure OpenAI resource with a model deployment (for example gpt-4o) for onboarding and tool classification: AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, AZURE_OPENAI_DEPLOYMENT and AZURE_OPENAI_API_VERSION (YYYY-MM-DD, for example 2024-10-21) in .env
+[ ] Anthropic API key (only for the demo agent, which runs on the Claude Agent SDK)
 [ ] Stripe account with a sandbox, and a restricted test-mode key (starts with rk_test_)
 [ ] Check which Stripe MCP connection works: local with npx -y @stripe/mcp --api-key=..., or remote against https://mcp.stripe.com with an Authorization header
 [ ] Resend: without a verified domain you can only send to the account owner's address, so decide in advance which address gets the demo email, or switch to Gmail SMTP
@@ -366,7 +367,7 @@ Our own small MCP server that calls the Stripe Python SDK with the test key. Sti
 The client stops waiting for a response during approval
 Test with a 30-second wait by 3:30
 Return "pending approval" immediately, and re-run the prompt after approval
-Claude returns broken JSON in onboarding
+The LLM returns broken JSON in onboarding
 Validation fails
 One retry, then a prepared policy.json for the demo
 The agent never attempts the forbidden action (refuses on its own)
