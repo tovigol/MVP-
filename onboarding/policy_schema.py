@@ -94,7 +94,9 @@ def normalize_rules(rules: list) -> list:
     out = []
     for rule in rules:
         rule = dict(rule)
-        when = {k: v for k, v in dict(rule.get("when") or {}).items() if v is not None}  # strict mode sends nulls
+        # Strict mode makes the model fill every key: unused ones come back as null, or as an empty list
+        # (a live gpt-5-mini wrote all_recipients_in: [] for a catch-all). Both mean "no condition".
+        when = {k: v for k, v in dict(rule.get("when") or {}).items() if v is not None and v != []}
         for op in RECIPIENT_OPERATORS:
             value = when.get(op)
             if isinstance(value, list):

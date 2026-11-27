@@ -65,7 +65,14 @@ def provider_label(provider: str) -> str:
 
 def azure_settings() -> dict:
     """Azure OpenAI settings, tolerant of common .env mistakes (see tests)."""
-    endpoint = re.sub(r"(?<=[^/])/openai(?:/.*)?$", "", env("AZURE_OPENAI_ENDPOINT")).rstrip("/")
+    raw_endpoint = env("AZURE_OPENAI_ENDPOINT")
+    host = re.match(r"https?://[^/\s]+", raw_endpoint)
+    # Keep scheme://host only: a pasted request URL (/openai/deployments/...) or a Foundry project address
+    # (/api/projects/<project>) must not end up in the base URL the client builds its own paths on.
+    endpoint = host.group(0) if host else raw_endpoint.rstrip("/")
+    # The Foundry address <resource>.services.ai.azure.com belongs to another SDK; the Azure OpenAI API of the
+    # same resource is served at <resource>.openai.azure.com.
+    endpoint = re.sub(r"\.services\.ai\.azure\.com$", ".openai.azure.com", endpoint)
     version = env("AZURE_OPENAI_API_VERSION") or DEFAULT_AZURE_API_VERSION
     day_first = re.fullmatch(r"(\d{2})-(\d{2})-(\d{4})(-preview)?", version)
     if day_first:  # 21-10-2024 -> 2024-10-21
@@ -169,16 +176,25 @@ def _azure_complete(client, system: str, messages: list[dict], schema: dict) -> 
     structured = {"type": "json_schema",
                   "json_schema": {"name": "policy_rules", "strict": True, "schema": to_strict_schema(schema)}}
     use_schema, tokens_param = True, "max_completion_tokens"
+    # Reasoning models (gpt-5, o-series) spend most of the time thinking; "low" keeps onboarding fast.
+    # A deployment that does not know the parameter (gpt-4o) is retried without it.
+    effort = env("AGENTGUARD_REASONING_EFFORT").lower() or "low"
+    use_effort = effort != "none"
     response = None
-    for _ in range(4):  # a deployment may lack structured outputs, or need max_tokens instead
+    for _ in range(5):  # a deployment may lack structured outputs, need max_tokens, or not take reasoning_effort
         kwargs = {"model": s["deployment"], "messages": [{"role": "system", "content": system}, *messages],
                   "response_format": structured if use_schema else {"type": "json_object"},
                   tokens_param: MAX_OUTPUT_TOKENS}
+        if use_effort:
+            kwargs["reasoning_effort"] = effort
         try:
             response = client.chat.completions.create(**kwargs)
             break
         except openai.BadRequestError as e:
             text = str(e)
+            if use_effort and "reasoning_effort" in text:
+                use_effort = False
+                continue
             if use_schema and re.search(r"response_format|json_schema|structured", text, re.I):
                 use_schema = False
                 continue
@@ -187,8 +203,10 @@ def _azure_complete(client, system: str, messages: list[dict], schema: dict) -> 
                 continue
             raise LLMError(f"Azure OpenAI rejected the request (400): {_short(e)}") from e
         except (openai.AuthenticationError, openai.PermissionDeniedError) as e:
-            raise AuthFailed(f"Azure OpenAI refused the credentials ({e.status_code}): "
-                             "check AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT") from e
+            raise AuthFailed(f"Azure OpenAI refused the credentials ({e.status_code}): the key does not match this "
+                             f"resource, or the endpoint is wrong. Endpoint used: {s['endpoint']}, "
+                             f"key length: {len(s['api_key'])}. Copy the key again from the resource's "
+                             "'Keys and Endpoint' page.") from e
         except openai.NotFoundError as e:
             raise LLMError(f"Azure OpenAI found nothing at deployment '{s['deployment']}' (404). "
                            f"Check AZURE_OPENAI_DEPLOYMENT, the endpoint and AZURE_OPENAI_API_VERSION: {_short(e)}") from e

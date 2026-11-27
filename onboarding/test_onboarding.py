@@ -12,7 +12,7 @@ import pytest
 from onboarding import llm
 from onboarding.baseline import (baseline_default_by_risk, baseline_rules, build_policy, ils_per_usd, limitation_notes,
                                  limits)
-from onboarding.equivalence import REGISTRY, reference_policy, semantic_problems
+from onboarding.equivalence import REGISTRY, explain_problems, reference_policy, semantic_problems
 from onboarding.policy_schema import (AMOUNT_OPERATORS, RECIPIENT_OPERATORS, RULES_JSON_SCHEMA, normalize_rules,
                                       to_strict_schema, validate_policy)
 from onboarding.questions import QUESTIONS, clean_answers, parse_addresses, parse_domains
@@ -224,6 +224,7 @@ def test_every_combination_of_answers_gives_a_valid_policy_that_matches_its_refe
         cleaned = _clean(**dict(zip(ids, combo)))
         built = build_policy(cleaned, baseline_rules(cleaned))
         assert validate_policy(built) == [] and semantic_problems(cleaned, built) == []
+        assert explain_problems(built) == []
 
 
 @pytest.mark.parametrize("rule, fragment", [
@@ -301,6 +302,12 @@ def test_normalize_rules_cleans_what_the_model_sends():
     assert rules[0]["when"] == {"all_recipients_in": "company_domains", "any_recipient_in": ["a.com"]}
 
 
+def test_empty_lists_from_strict_mode_mean_no_condition():
+    rules = normalize_rules([{"id": "email-unknown", "category": "email_send", "effect": "ask", "explain": "x",
+                              "when": {"all_recipients_in": [], "any_recipient_in": [], "amount_usd_lte": None}}])
+    assert rules[0]["when"] == {}
+
+
 def test_operator_sets_match_the_engine():
     assert AMOUNT_OPERATORS | RECIPIENT_OPERATORS == set(OPERATORS)  # OPERATORS is a name -> handler dict
 
@@ -357,6 +364,25 @@ def test_a_policy_that_misreads_the_answers_is_caught(answers, policy, mutate, f
     problems = semantic_problems(answers, wrong)
     assert any(fragment in p for p in problems), problems
     assert all("owner's answers require" in p for p in problems if "more calls" not in p)
+
+
+@pytest.mark.parametrize("rule_id, text, fragment", [
+    ("email-internal", "מיילים פנימיים נשלחים אוטומטית; המגבלה היומית היא 7,000 ₪", "must not mention amounts"),
+    ("no-export", "ייצוא חסום, עד $5", "must not mention amounts"),
+    ("pay-auto", "תשלום עד 3,500 ₪ מתבצע אוטומטית", "not one of the two limits"),
+    ("pay-auto", "Payments are automatic", "must be in Hebrew"),
+    ("read-all", "קריאה מותרת " + "מאוד " * 60, "one short sentence"),
+])
+def test_wrong_facts_in_an_explanation_are_caught(policy, rule_id, text, fragment):
+    wrong = copy.deepcopy(policy)
+    _rule(wrong, rule_id)["explain"] = text
+    assert any(fragment in p for p in explain_problems(wrong)), explain_problems(wrong)
+
+
+def test_the_two_limits_may_be_named_in_either_currency(policy):
+    right = copy.deepcopy(policy)
+    _rule(right, "pay-auto")["explain"] = "תשלום עד 2,000 ₪ (כ־$540) מתבצע אוטומטית, עד 7,000 ₪ ליום"
+    assert explain_problems(right) == []
 
 
 # --- translate_answers with a fake model ------------------------------------------------------
@@ -442,6 +468,15 @@ def test_rules_that_misread_the_answers_are_retried_and_then_replaced(answers):
                                client=FakeClient(_misread_reply(answers), _misread_reply(answers)))
     assert result.source == "fallback" and result.fallback_reason == "invalid_output"
     assert result.policy["rules"] == baseline_rules(answers)
+
+
+def test_a_wrong_fact_in_an_explanation_is_retried(answers):
+    def leak_limit(rules):
+        next(r for r in rules if r["id"] == "read-all")["explain"] = "קריאה מותרת; המגבלה היומית היא 7,000 ₪"
+    client = FakeClient(_reply(answers, mutate=leak_limit), _reply(answers))
+    result = translate_answers(answers, provider="anthropic", client=client)
+    assert result.source == "llm_retry"
+    assert "must not mention amounts" in client.calls[1]["messages"][-1]["content"]
 
 
 def test_two_unusable_answers_fall_back_to_baseline(answers):
@@ -586,6 +621,22 @@ def test_azure_deployment_that_wants_max_tokens(answers, azure_env):
     assert "max_tokens" in client.calls[1] and "max_completion_tokens" not in client.calls[1]
 
 
+def test_azure_asks_for_low_reasoning_and_drops_it_for_models_that_do_not_know_it(answers, azure_env):
+    import openai
+    client = FakeAzureClient(_azure_error(openai.BadRequestError, "Unrecognized request argument: reasoning_effort", 400),
+                             _strict_reply(answers))
+    assert translate_answers(answers, provider="azure", client=client).source == "llm"
+    assert client.calls[0]["reasoning_effort"] == "low"
+    assert "reasoning_effort" not in client.calls[1]
+
+
+def test_reasoning_effort_can_be_switched_off(answers, azure_env, monkeypatch):
+    monkeypatch.setenv("AGENTGUARD_REASONING_EFFORT", "none")
+    client = FakeAzureClient(_strict_reply(answers))
+    translate_answers(answers, provider="azure", client=client)
+    assert "reasoning_effort" not in client.calls[0]
+
+
 @pytest.mark.parametrize("reply", [
     ("length", "{}", None),
     ("content_filter", "", None),
@@ -622,6 +673,11 @@ def test_azure_settings_tolerate_common_env_mistakes(azure_env, monkeypatch):
     assert llm.credentials_problems("azure") == []
     monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://openai-resource.openai.azure.com")
     assert llm.azure_settings()["endpoint"] == "https://openai-resource.openai.azure.com"  # not cut at "//openai"
+    # A Foundry project address (what the portal shows first) becomes the resource's Azure OpenAI address.
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://my-res.services.ai.azure.com/api/projects/my-project")
+    assert llm.azure_settings()["endpoint"] == "https://my-res.openai.azure.com"
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://my-res.cognitiveservices.azure.com/")
+    assert llm.azure_settings()["endpoint"] == "https://my-res.cognitiveservices.azure.com"
     monkeypatch.setenv("AZURE_OPENAI_API_VERSION", "latest")
     assert any("AZURE_OPENAI_API_VERSION" in p for p in llm.credentials_problems("azure"))
 

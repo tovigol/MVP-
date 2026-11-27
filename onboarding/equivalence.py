@@ -7,6 +7,8 @@ to the model as feedback, and after a failed retry the reference itself is used.
 """
 from __future__ import annotations
 
+import re
+
 from shared.policy import evaluate
 
 from .baseline import baseline_rules, build_policy, limits
@@ -53,6 +55,35 @@ def _calls(answers: dict):
     calls += [("a read tool", "read", {}, 0), ("an export tool", "export", {}, 0),
               ("a delete tool", "delete", {}, 0), ("a tool that is not in the registry", "mystery", {}, 0)]
     return calls
+
+
+_AMOUNT = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*₪|\$\s*(\d[\d,]*(?:\.\d+)?)")
+MAX_EXPLAIN_CHARS = 200
+
+
+def explain_problems(policy: dict) -> list[str]:
+    """The owner reads every `explain` and the agent receives it, so the facts in it must be true.
+
+    Decisions are checked by semantic_problems; here: only payment rules may mention amounts, and only the
+    two limits (in shekels or USD); the text must be short Hebrew. (Grammar cannot be checked by code.)
+    """
+    lim = limits()
+    allowed = {str(lim[k]) for k in ("auto_ils", "auto_usd", "daily_ils", "daily_usd")}
+    problems = []
+    for rule in policy["rules"]:
+        text, rule_id = rule["explain"], rule["id"]
+        amounts = [(a or b).replace(",", "") for a, b in _AMOUNT.findall(text)]
+        if rule["category"] != "payment" and ("₪" in text or "$" in text):
+            problems.append(f"rule '{rule_id}': explain must not mention amounts or limits; "
+                            "only payment rules do")
+        elif rule["category"] == "payment" and any(a not in allowed for a in amounts):
+            problems.append(f"rule '{rule_id}': explain mentions an amount that is not one of the two limits "
+                            f"({', '.join(sorted(allowed, key=int))})")
+        if not re.search("[א-ת]", text):
+            problems.append(f"rule '{rule_id}': explain must be in Hebrew")
+        if len(text) > MAX_EXPLAIN_CHARS:
+            problems.append(f"rule '{rule_id}': explain must be one short sentence")
+    return problems
 
 
 def semantic_problems(answers: dict, policy: dict) -> list[str]:

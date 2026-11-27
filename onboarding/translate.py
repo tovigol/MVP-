@@ -22,7 +22,7 @@ from typing import Literal
 from shared.policy import POLICY_PATH
 
 from .baseline import baseline_default_by_risk, baseline_rules, build_policy, limitation_notes, limits  # noqa: F401
-from .equivalence import semantic_problems
+from .equivalence import explain_problems, semantic_problems
 from .llm import (LLMError, active_provider, complete_json, credentials_available, credentials_problems,  # noqa: F401
                   describe, make_client, provider_label)
 from .policy_schema import RULES_JSON_SCHEMA, normalize_rules, validate_policy
@@ -41,8 +41,10 @@ through your rules, and rejects any rule set that does not behave the way the ow
 - id: unique lowercase kebab-case.
 - category: one of payment | email_send | read | bulk_export.
 - effect: allow | ask | deny.
-- explain: ONE short plain-Hebrew sentence the owner can read. Use the shekel amounts from `limits` (for example \
-"תשלום עד 2,000 ₪ מתבצע אוטומטית"). No jargon, no rule ids.
+- explain: ONE short plain-Hebrew sentence the owner can read, describing only what THIS rule does. Mention \
+shekel or dollar amounts only in payment rules, and only the limits from `limits` (for example "תשלום עד 2,000 ₪ \
+מתבצע אוטומטית"): never mention a limit in an email, read or export rule. Use the owner's own words, such as \
+"כתובות במשרד", "כתובות קבועות", "כתובות לא מוכרות". Write simple, correct Hebrew. No jargon, no rule ids.
 - when: all listed conditions must hold; {} matches everything in the category. These are the ONLY operators:
   - amount_usd_lte (payment only): number in USD. The payment amount is <= this value.
   - daily_total_usd_lte (payment only): number in USD. Today's cumulative total INCLUDING this payment is <= this value.
@@ -144,7 +146,8 @@ def translate_answers(answers: dict, client=None, provider: str | None = None) -
             data = json.loads(text)
             policy = build_policy(answers, normalize_rules(data["rules"]))
             llm_notes = [str(item) for item in data.get("unsupported", [])]
-            problems = validate_policy(policy) or semantic_problems(answers, policy)
+            problems = (validate_policy(policy) or semantic_problems(answers, policy)
+                        or explain_problems(policy))
         except (json.JSONDecodeError, KeyError, TypeError, ValueError, AttributeError) as e:
             problems = [f"Output was not the expected JSON shape ({type(e).__name__}: {e})"]
 
@@ -163,7 +166,7 @@ def translate_answers(answers: dict, client=None, provider: str | None = None) -
 
 def _fallback(answers: dict, errors: list[str], reason: str, provider: str) -> TranslationResult:
     policy = build_policy(answers, baseline_rules(answers))
-    problems = validate_policy(policy) or semantic_problems(answers, policy)
+    problems = validate_policy(policy) or semantic_problems(answers, policy) or explain_problems(policy)
     if problems:  # a bug in baseline_rules or in the answers: never write an invalid file
         raise RuntimeError("baseline policy failed validation: " + "; ".join(problems))
     return TranslationResult(policy, "fallback", limitation_notes(answers), errors, reason, provider)
