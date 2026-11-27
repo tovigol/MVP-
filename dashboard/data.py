@@ -17,19 +17,22 @@ DESTRUCTIVE_TAG = "[DESTRUCTIVE]"
 ARGS_PREVIEW_CHARS = 1200
 
 # Status palette (dataviz reference: good / warning / critical). Always paired with
-# an icon + words, so color never carries the meaning alone.
+# words (and an icon where one can be drawn), so color never carries the meaning alone.
 GOOD, WARNING, CRITICAL, NEUTRAL, ACCENT = "#0aac23", "#fbb315", "#dc3c3d", "#8a8a8a", "#2f6fdf"
 
-# One status per event -> plain words, icon, and the color family it belongs to.
+# One status per event -> Material Symbols icon name, plain words, and its color family.
+# Icon names: https://fonts.google.com/icons (Streamlit bundles the Rounded style).
 STATUSES = {
-    "forwarded": ("✅", "Done automatically", GOOD),
-    "blocked": ("🛑", "Stopped", CRITICAL),
-    "pending": ("⏳", "Waiting for you", WARNING),
-    "approved": ("👍", "Approved", ACCENT),
-    "rejected": ("✋", "Declined", NEUTRAL),
-    "timeout": ("⌛", "Expired, nothing was done", NEUTRAL),
-    "error": ("⚠️", "Failed", CRITICAL),
+    "forwarded": ("check_circle", "Done automatically", GOOD),
+    "blocked": ("block", "Stopped", CRITICAL),
+    "pending": ("hourglass_top", "Waiting for you", WARNING),
+    "approved": ("thumb_up", "Approved", ACCENT),
+    "rejected": ("front_hand", "Declined", NEUTRAL),
+    "timeout": ("timer_off", "Expired, nothing was done", NEUTRAL),
+    "error": ("error", "Failed", CRITICAL),
 }
+
+UNDOABLE_PREFIX = "Can't be undone. "
 
 # Filter chips -> which statuses they show.
 VIEWS = {
@@ -103,8 +106,14 @@ def status_of(row: dict) -> str:
 
 
 def result_text(status: str) -> str:
-    icon, label, _ = STATUSES.get(status, ("", status, NEUTRAL))
-    return f"{icon} {label}".strip()
+    """Plain words, for the activity table (a dataframe cell can't draw icons; the cell color helps)."""
+    return STATUSES.get(status, ("", status, NEUTRAL))[1]
+
+
+def result_md(status: str) -> str:
+    """Icon + words, for Streamlit markdown (':material/name:' renders as a Material Symbol)."""
+    icon = STATUSES.get(status, ("",))[0]
+    return f":material/{icon}: {result_text(status)}" if icon else result_text(status)
 
 
 def is_destructive(row: dict) -> bool:
@@ -115,7 +124,7 @@ def reason_text(row: dict) -> str:
     """Reason in plain words: the [DESTRUCTIVE] tag becomes a short warning."""
     reason = str(row.get("reason") or "")
     if reason.startswith(DESTRUCTIVE_TAG):
-        return "🔴 Can't be undone. " + reason[len(DESTRUCTIVE_TAG):].strip()
+        return UNDOABLE_PREFIX + reason[len(DESTRUCTIVE_TAG):].strip()
     return reason
 
 
@@ -322,7 +331,7 @@ def owner_summary(c: dict) -> str:
     parts = [f"{n} {word}" for n, word in ((c["owner_approved"], "approved"),
                                             (c["owner_rejected"], "declined"),
                                             (c["owner_timeout"], "expired")) if n]
-    parts.append(f"{c['owner_pending']} waiting now" if c["owner_pending"] else "✓ All answered")
+    parts.append(f"{c['owner_pending']} waiting now" if c["owner_pending"] else "All answered")
     return " · ".join(parts)
 
 

@@ -49,7 +49,7 @@ SLACK_URL = f"https://slack.com/app_redirect?channel={SLACK_CHANNEL}" if SLACK_C
 # True when reading the real guard.db; anything else (GUARD_DB set) is test data.
 USING_REAL_DB = store.DB_PATH.resolve() == store.REAL_DB_PATH.resolve()
 
-st.set_page_config(page_title="AgentGuard", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="AgentGuard", page_icon=":material/shield:", layout="wide")
 
 st.markdown(f"""
 <style>
@@ -109,6 +109,16 @@ header[data-testid="stHeader"] {{ background: transparent; }}
 .ag-btn {{ display: inline-block; margin-top: 10px; padding: 7px 14px; border-radius: 9px; background: {BRAND};
            color: #fff !important; font-size: 13px; font-weight: 600; text-decoration: none !important; }}
 .ag-bar-row {{ display: flex; justify-content: space-between; font-size: 14px; color: #344054; margin-top: 12px; }}
+
+/* Material Symbols (Rounded). Streamlit ships this font, so it works offline too. */
+.ag-mi {{ font-family: "Material Symbols Rounded"; font-weight: normal; font-style: normal; font-size: 1.2em;
+          line-height: 1; letter-spacing: normal; text-transform: none; white-space: nowrap; direction: ltr;
+          display: inline-block; vertical-align: -0.22em; font-feature-settings: "liga";
+          -webkit-font-smoothing: antialiased; user-select: none; }}
+.ag-icon .ag-mi {{ font-size: 21px; vertical-align: 0; }}
+.ag-pill .ag-mi {{ font-size: 17px; vertical-align: 0; }}
+.ag-card-title .ag-mi, .ag-empty .ag-mi {{ margin-right: 4px; }}
+.ag-btn .ag-mi {{ font-size: 16px; margin-left: 4px; vertical-align: -0.2em; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -125,10 +135,16 @@ def esc(text) -> str:
     return html.escape(str(text))
 
 
+def mi(name: str, color: str | None = None) -> str:
+    """A Material Symbols icon for the raw-HTML cards (':material/name:' only works in Streamlit markdown)."""
+    style = f' style="color:{color}"' if color else ""
+    return f'<span class="ag-mi" aria-hidden="true"{style}>{esc(name)}</span>'
+
+
 # --- sidebar (changing these reruns the whole page) -----------------------------
 
 with st.sidebar:
-    st.markdown(f'<div style="font-size:22px;font-weight:700;color:#101828">🛡️ Agent<span style="color:{BRAND}">'
+    st.markdown(f'<div style="font-size:22px;font-weight:700;color:#101828">{mi("shield", BRAND)} Agent<span style="color:{BRAND}">'
                 f'Guard</span></div><div style="font-size:12px;color:#667085;margin-bottom:18px">'
                 f'Your AI assistant\'s safety guard</div>', unsafe_allow_html=True)
     st.subheader("Settings")
@@ -154,7 +170,7 @@ with st.sidebar:
     if USING_REAL_DB:
         st.caption("Data: your real activity (guard.db)")
     else:
-        st.caption(f"🧪 Test database: {store.DB_PATH}")
+        st.caption(f":material/science: Test database: {store.DB_PATH}")
 
 
 # --- HTML blocks ---------------------------------------------------------------
@@ -165,16 +181,17 @@ def header_html(business: str, pending: int, blocked: int) -> str:
              f'Guard is on</span>']
     if not USING_REAL_DB:
         pills.insert(0, '<span class="ag-pill" style="background:#eef4ff;border-color:#c7d7fe;color:#3538cd">'
-                        '🧪 Test data</span>')
+                        f'{mi("science")} Test data</span>')
     if pending:
-        pills.append(f'<span class="ag-pill" style="background:#fff8e6;border-color:#fde7a8">⏳ {pending} waiting '
-                     f'for you</span>')
+        pills.append(f'<span class="ag-pill" style="background:#fff8e6;border-color:#fde7a8">'
+                     f'{mi("hourglass_top", "#b54708")} {pending} waiting for you</span>')
     if blocked:
-        pills.append(f'<span class="ag-pill" style="background:#fdeeee;border-color:#f8cfcf">🛑 {blocked} stopped '
-                     f'today</span>')
-    live = "⏸️ Paused" if paused else f"🟢 Live · {datetime.now():%H:%M:%S}"
+        pills.append(f'<span class="ag-pill" style="background:#fdeeee;border-color:#f8cfcf">'
+                     f'{mi("block", data.CRITICAL)} {blocked} stopped today</span>')
+    live = (f'{mi("pause_circle", data.NEUTRAL)} Paused' if paused
+            else f'{mi("sensors", data.GOOD)} Live · {datetime.now():%H:%M:%S}')
     pills.append(f'<span class="ag-pill">{live}</span>')
-    return (f'<div class="ag-top"><div><div class="ag-hello">{data.greeting()} 👋</div>'
+    return (f'<div class="ag-top"><div><div class="ag-hello">{data.greeting()} {mi("waving_hand", "#f5a524")}</div>'
             f'<div class="ag-hello-sub">Here\'s what your AI assistant did today{who}. '
             f'Every action is checked against your rules first.</div></div>'
             f'<div class="ag-pills">{"".join(pills)}</div></div>')
@@ -182,7 +199,7 @@ def header_html(business: str, pending: int, blocked: int) -> str:
 
 def kpi_html(icon: str, color: str, label: str, value: str, sub: str, spark: list[int]) -> str:
     return (f'<div class="ag-card"><div class="ag-kpi-head"><span class="ag-icon" '
-            f'style="background:{data.tint(color, .14)}">{icon}</span>{esc(label)}</div>'
+            f'style="background:{data.tint(color, .14)}">{mi(icon, color)}</span>{esc(label)}</div>'
             f'<div class="ag-kpi-body"><div><div class="ag-kpi-value">{esc(value)}</div>'
             f'<div class="ag-kpi-sub">{sub}</div></div>{charts.sparkline(spark, color)}</div></div>')
 
@@ -194,12 +211,13 @@ def kpis_html(c: dict, hours: list[dict]) -> str:
     spark_total = [h["automatic"] + h["blocked"] + h["owner"] for h in upto]
     owner_sub = esc(data.owner_summary(c))
     cards = [
-        kpi_html("🤖", BRAND, "Total actions", str(c["total"]), "Checked by the guard today", spark_total),
-        kpi_html("✅", data.GOOD, "Done automatically", str(c["automatic"]),
+        kpi_html("smart_toy", BRAND, "Total actions", str(c["total"]), "Checked by the guard today", spark_total),
+        kpi_html("check_circle", data.GOOD, "Done automatically", str(c["automatic"]),
                  f'<b style="color:#067a18">{c["automatic_pct"]}%</b> of all actions', spark["automatic"]),
-        kpi_html("🛑", data.CRITICAL, "Stopped", str(c["blocked"]), "Blocked before anything happened",
+        kpi_html("block", data.CRITICAL, "Stopped", str(c["blocked"]), "Blocked before anything happened",
                  spark["blocked"]),
-        kpi_html("📋", data.WARNING, "Approval requests today", str(c["owner"]), owner_sub, spark["owner"]),
+        kpi_html("fact_check", data.WARNING, "Approval requests today", str(c["owner"]), owner_sub,
+                 spark["owner"]),
     ]
     return f'<div class="ag-kpis">{"".join(cards)}</div>'
 
@@ -242,17 +260,20 @@ def waiting_card_html(pending: list[dict]) -> str:
         timer = f"{left}s left to answer" if left else "Time's up. Cancelling, nothing will happen."
         flag = '<span class="ag-badge" style="background:#fdeeee;color:#b42318">Can\'t be undone</span>' \
             if data.is_destructive(row) else ""
-        why = data.reason_text(row).replace("🔴 Can't be undone. ", "") or "Not covered by your rules"
-        button = f'<a class="ag-btn" href="{esc(SLACK_URL)}" target="_blank">Answer in Slack →</a>' \
+        why = data.reason_text(row).replace(data.UNDOABLE_PREFIX, "") or "Not covered by your rules"
+        button = (f'<a class="ag-btn" href="{esc(SLACK_URL)}" target="_blank">Answer in Slack'
+                  f'{mi("arrow_forward")}</a>') \
             if SLACK_URL else '<div class="ag-item-meta">Answer in Slack, #agent-approvals</div>'
         items.append(f'<div class="ag-item"><div class="ag-item-title">{esc(data.describe(row))}{flag}</div>'
                      f'<div class="ag-item-meta">{esc(why)}</div>'
                      f'<div class="ag-track" style="background:{data.tint(data.WARNING, .18)}">'
                      f'<span style="width:{pct}%;background:{data.WARNING}"></span></div>'
-                     f'<div class="ag-item-meta">⏱️ {timer}</div>{button}</div>')
-    body = "".join(items) or '<div class="ag-empty">✨ Nothing is waiting for you. Approvals show up here and in Slack.</div>'
+                     f'<div class="ag-item-meta">{mi("timer")} {timer}</div>{button}</div>')
+    body = "".join(items) or (f'<div class="ag-empty">{mi("task_alt", data.GOOD)}Nothing is waiting for you. '
+                              'Approvals show up here and in Slack.</div>')
     count = f" ({len(pending)})" if pending else ""
-    return (f'<div class="ag-card"><div class="ag-card-title">⏳ Waiting for your answer{count}</div>'
+    return (f'<div class="ag-card"><div class="ag-card-title">{mi("hourglass_top", "#b54708")}'
+            f'Waiting for your answer{count}</div>'
             f'<div class="ag-card-sub">The assistant pauses until you decide</div>{body}</div>')
 
 
@@ -263,8 +284,8 @@ def stopped_card_html(today_events: list[dict]) -> str:
         f'<span class="ag-badge" style="background:#fdeeee;color:#b42318">Stopped</span></div>'
         f'<div class="ag-item-meta">{esc(data.reason_text(row) or "Not allowed by your rules")} · '
         f'{esc(data.relative_time(row.get("ts")))}</div></div>' for row in blocked)
-    body = items or '<div class="ag-empty">🛡️ Nothing was stopped today.</div>'
-    return (f'<div class="ag-card"><div class="ag-card-title">🛑 Stopped for your safety</div>'
+    body = items or f'<div class="ag-empty">{mi("verified_user", data.GOOD)}Nothing was stopped today.</div>'
+    return (f'<div class="ag-card"><div class="ag-card-title">{mi("block", data.CRITICAL)}Stopped for your safety</div>'
             f'<div class="ag-card-sub">Blocked before they could happen</div>{body}</div>')
 
 
@@ -277,7 +298,7 @@ def worked_on_card_html(today_events: list[dict]) -> str:
         f'<span style="width:{round(100 * n / total)}%;background:{BRAND}"></span></div>'
         for label, n in breakdown)
     body = rows or '<div class="ag-empty">Nothing yet today.</div>'
-    return (f'<div class="ag-card"><div class="ag-card-title">📋 What your assistant worked on</div>'
+    return (f'<div class="ag-card"><div class="ag-card-title">{mi("checklist", BRAND)}What your assistant worked on</div>'
             f'<div class="ag-card-sub">Today, by type of action</div>{body}</div>')
 
 
@@ -291,7 +312,7 @@ def render_toasts(events: list[dict]) -> None:
     last_seen = st.session_state.get("last_seen_id")
     if last_seen is not None:
         for row in data.new_blocked(events, last_seen):
-            st.toast(f"Stopped: {data.describe(row)}", icon="🛑")
+            st.toast(f"Stopped: {data.describe(row)}", icon=":material/block:")
     st.session_state["last_seen_id"] = max(newest, last_seen or 0)
 
 
@@ -329,7 +350,7 @@ def render_activity(events: list[dict]) -> None:
                                   key="details_id")
             if choice is not None and choice in by_id:
                 row = by_id[choice]
-                st.markdown(f"**Result:** {data.result_text(data.status_of(row))}  \n"
+                st.markdown(f"**Result:** {data.result_md(data.status_of(row))}  \n"
                             f"**Why:** {data.reason_text(row) or '—'}  \n"
                             f"**Tool:** `{row.get('tool')}` · **Rule:** `{row.get('rule_id') or 'default'}`")
                 st.code(data.pretty_args(row.get("args_json")), language="json")
@@ -355,8 +376,9 @@ def live() -> None:
     hours = data.hourly_counts(today_events)
 
     if not USING_REAL_DB:
-        st.warning(f"🧪 **Test data.** This screen is reading a test database ({store.DB_PATH.name}), "
-                   "not your real activity. Start the dashboard without GUARD_DB to see guard.db.")
+        st.warning(f"**Test data.** This screen is reading a test database ({store.DB_PATH.name}), "
+                   "not your real activity. Start the dashboard without GUARD_DB to see guard.db.",
+                   icon=":material/science:")
     st.markdown(header_html(load_policy_safe().get("business", ""), len(pending), c["blocked"]),
                 unsafe_allow_html=True)
     st.markdown(kpis_html(c, hours), unsafe_allow_html=True)
