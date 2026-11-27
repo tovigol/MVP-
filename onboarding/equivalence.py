@@ -34,7 +34,7 @@ def reference_policy(answers: dict) -> dict:
 
 def _calls(answers: dict):
     """(description, tool, args, today's total so far) for the sample calls."""
-    lim = limits()
+    lim = limits(answers)
     auto, daily = lim["auto_usd"], lim["daily_usd"]
     calls = []
     for amount in sorted({1, auto, auto + 1, daily, daily + 1, 10 * daily}):
@@ -72,7 +72,7 @@ def explain_problems(policy: dict, answers: dict | None = None) -> list[str]:
     amounts that rule is about (those in the reference explanation of the same rule id, or else either
     limit, in shekels or USD); the text must be short Hebrew. Grammar and wording cannot be checked by code.
     """
-    lim = limits()
+    lim = limits(answers)
     both = {str(lim[k]) for k in ("auto_ils", "auto_usd", "daily_ils", "daily_usd")}
     reference = ({r["id"]: _amounts(r["explain"]) for r in reference_policy(answers)["rules"]}
                  if answers else {})

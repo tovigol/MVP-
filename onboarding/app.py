@@ -81,7 +81,12 @@ def questions_step() -> None:
             st.caption(f"אם לא עונים: {q.default_note}")
             if q.follow_up and raw[q.id]:
                 f = q.follow_up
-                raw[f.id] = st.text_input(f.label, value=defaults.get(f.id, ""), placeholder=f.placeholder, key=f.id)
+                if f.kind == "amount":  # questions 1 and 2: the owner chooses the amount
+                    raw[f.id] = st.number_input(f.label, min_value=1, step=100, format="%d",
+                                                value=int(defaults.get(f.id) or f.default), key=f.id)
+                else:
+                    raw[f.id] = st.text_input(f.label, value=defaults.get(f.id, ""), placeholder=f.placeholder,
+                                              key=f.id)
 
     if not st.button("צור את החוקים שלי", type="primary"):
         return

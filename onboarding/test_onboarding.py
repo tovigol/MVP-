@@ -68,8 +68,11 @@ def test_questionnaire_matches_the_spec():
     assert [sum(q.section == s for q in QUESTIONS) for s in ("payments", "mail", "data")] == [4, 4, 3]
     # "if not answered" defaults: 1 no, 2 yes, 3 no, 4 yes, 5 no, 6 no, 7 yes, 8 no, 9 yes, 10 yes, 11 yes
     assert [q.default for q in QUESTIONS] == [False, True, False, True, False, False, True, False, True, True, True]
-    assert "2,000 ₪" in QUESTIONS[0].text and "7,000 ₪" in QUESTIONS[1].text
-    assert [q.id for q in QUESTIONS if q.follow_up] == ["pay_trusted_suppliers", "mail_internal", "mail_trusted"]
+    # 1 and 2 let the owner choose the amount; 2,000 and 7,000 are only the suggestions
+    assert [(q.follow_up.id, q.follow_up.kind, q.follow_up.default) for q in QUESTIONS[:2]] == [
+        ("auto_limit_ils", "amount", 2000), ("daily_limit_ils", "amount", 7000)]
+    assert [q.id for q in QUESTIONS if q.follow_up] == [
+        "pay_auto", "pay_daily_limit", "pay_trusted_suppliers", "mail_internal", "mail_trusted"]
 
 
 def test_an_untouched_form_gives_the_cautious_policy():
@@ -146,6 +149,56 @@ def test_parse_domains_and_addresses_accept_common_shapes():
 ])
 def test_policy_decisions(policy, tool, args, total, expected):
     assert _effect(policy, tool, args, total) == expected
+
+
+def test_the_owner_can_choose_the_amounts():
+    custom = _clean(auto_limit_ils=500, daily_limit_ils=3000)   # 135 and 810 USD at 3.7, rounded down
+    assert (custom["auto_limit_ils"], custom["daily_limit_ils"]) == (500, 3000)
+    assert (limits(custom)["auto_usd"], limits(custom)["daily_usd"]) == (135, 810)
+    policy = _policy_for(auto_limit_ils=500, daily_limit_ils=3000)
+    assert _effect(policy, "pay", {"amount": 100}) == "allow"
+    assert _effect(policy, "pay", {"amount": 140}) == "ask"                 # above the 500 ₪ the owner chose
+    assert _effect(policy, "pay", {"amount": 100}, 700) == "allow"          # 800 is under the daily cap
+    assert _effect(policy, "pay", {"amount": 100}, 750) == "deny"           # 850 passes the 3,000 ₪ cap
+    assert _effect(policy, "pay", {"amount": AUTO}) == "ask"                # the old suggestion no longer applies
+    explanations = " | ".join(r["explain"] for r in policy["rules"] if r["category"] == "payment")
+    assert "500 ₪" in explanations and "3,000 ₪" in explanations and "2,000" not in explanations
+    assert explain_problems(policy, custom) == [] and semantic_problems(custom, policy) == []
+
+
+def test_amounts_missing_from_the_form_fall_back_to_the_suggestions():
+    default = _clean()
+    assert (default["auto_limit_ils"], default["daily_limit_ils"]) == (2000, 7000)
+    assert _clean(auto_limit_ils="", daily_limit_ils=None)["auto_limit_ils"] == 2000
+
+
+def test_a_policy_built_for_other_amounts_is_caught():
+    custom = _clean(auto_limit_ils=500, daily_limit_ils=3000)
+    suggested = _policy_for()                                              # built for 2,000 and 7,000
+    assert any("payment of" in p for p in semantic_problems(custom, suggested))
+
+
+@pytest.mark.parametrize("auto", [0, -5, "abc", "1e400", 10 ** 9])
+def test_an_unusable_amount_is_reported(auto):
+    _, problems = clean_answers({**RAW, "auto_limit_ils": auto})
+    assert any("שאלה 1" in p for p in problems), problems
+
+
+def test_the_daily_cap_cannot_be_lower_than_the_automatic_limit():
+    _, problems = clean_answers({**RAW, "auto_limit_ils": 5000, "daily_limit_ils": 3000})
+    assert any("שאלה 2" in p for p in problems), problems
+
+
+def test_amounts_of_unticked_questions_are_ignored():
+    cleaned, problems = clean_answers({**RAW, "pay_auto": False, "pay_daily_limit": False,
+                                       "auto_limit_ils": "abc", "daily_limit_ils": -1})
+    assert problems == [] and cleaned["auto_limit_ils"] is None and cleaned["daily_limit_ils"] is None
+
+
+def test_the_model_is_told_the_amounts_the_owner_chose():
+    prompt = _user_prompt(_clean(auto_limit_ils=500, daily_limit_ils=3000))
+    assert '"auto_ils": 500' in prompt and '"auto_usd": 135' in prompt
+    assert '"daily_ils": 3000' in prompt and '"daily_usd": 810' in prompt
 
 
 def test_limits_at_the_default_rate():

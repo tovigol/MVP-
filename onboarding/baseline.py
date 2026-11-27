@@ -30,7 +30,7 @@ DEFAULT_ILS_PER_USD = 3.7
 
 
 def ils(value: float) -> str:
-    return f"{value:,.0f} ₪"
+    return f"{value:,.0f} ₪" if float(value).is_integer() else f"{value:,.2f} ₪"
 
 
 def ils_per_usd() -> float:
@@ -43,11 +43,17 @@ def ils_per_usd() -> float:
 
 
 def limits(answers: dict | None = None) -> dict:
-    """The two limits in shekels and in USD (rounded down, at least 1)."""
+    """The two limits in shekels and in USD (rounded down, at least 1).
+
+    The amounts are the ones the owner chose in questions 1 and 2; without answers, or for a question that was
+    not ticked, the suggested amounts are used (the sample calls in equivalence.py still need both).
+    """
     rate = ils_per_usd()
+    auto = (answers or {}).get("auto_limit_ils") or AUTO_PAY_LIMIT_ILS
+    daily = (answers or {}).get("daily_limit_ils") or DAILY_LIMIT_ILS
     return {"rate": rate,
-            "auto_ils": AUTO_PAY_LIMIT_ILS, "auto_usd": max(1, math.floor(AUTO_PAY_LIMIT_ILS / rate)),
-            "daily_ils": DAILY_LIMIT_ILS, "daily_usd": max(1, math.floor(DAILY_LIMIT_ILS / rate))}
+            "auto_ils": auto, "auto_usd": max(1, math.floor(auto / rate)),
+            "daily_ils": daily, "daily_usd": max(1, math.floor(daily / rate))}
 
 
 def _rule(rule_id: str, category: str, effect: str, when: dict, explain: str) -> dict:
@@ -55,7 +61,7 @@ def _rule(rule_id: str, category: str, effect: str, when: dict, explain: str) ->
 
 
 def baseline_rules(answers: dict) -> list[dict]:
-    lim = limits()
+    lim = limits(answers)
     auto, daily = answers["pay_auto"], answers["pay_daily_limit"]
     auto_txt = f"{ils(lim['auto_ils'])} (כ־${lim['auto_usd']:,})"
     daily_txt = f"{ils(lim['daily_ils'])} (כ־${lim['daily_usd']:,})"
@@ -120,7 +126,7 @@ def build_policy(answers: dict, rules: list[dict]) -> dict:
 
 def limitation_notes(answers: dict) -> list[str]:
     """What the owner asked for that the Guard cannot enforce (or enforces more strictly). Hebrew, for the checklist."""
-    lim = limits()
+    lim = limits(answers)
     notes: list[str] = []
     if answers["pay_trusted_suppliers"]:
         notes.append(f"שאלה 3: הספקים הקבועים ({', '.join(answers['supplier_names'])}) נשמרו, אבל ה־Guard עדיין "

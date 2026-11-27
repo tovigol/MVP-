@@ -105,7 +105,7 @@ class TranslationResult:
 
 def _user_prompt(answers: dict) -> str:
     # Only structured values are sent: no free text from the owner (supplier names, addresses) reaches the model.
-    lim = limits()
+    lim = limits(answers)
     payload = {
         "answers": {q.id: answers[q.id] for q in QUESTIONS},
         "limits": {"auto_ils": lim["auto_ils"], "auto_usd": lim["auto_usd"],
