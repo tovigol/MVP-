@@ -61,24 +61,34 @@ _AMOUNT = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*₪|\$\s*(\d[\d,]*(?:\.\d+)?)")
 MAX_EXPLAIN_CHARS = 200
 
 
-def explain_problems(policy: dict) -> list[str]:
+def _amounts(text: str) -> set[str]:
+    return {(a or b).replace(",", "") for a, b in _AMOUNT.findall(text)}
+
+
+def explain_problems(policy: dict, answers: dict | None = None) -> list[str]:
     """The owner reads every `explain` and the agent receives it, so the facts in it must be true.
 
     Decisions are checked by semantic_problems; here: only payment rules may mention amounts, and only the
-    two limits (in shekels or USD); the text must be short Hebrew. (Grammar cannot be checked by code.)
+    amounts that rule is about (those in the reference explanation of the same rule id, or else either
+    limit, in shekels or USD); the text must be short Hebrew. Grammar and wording cannot be checked by code.
     """
     lim = limits()
-    allowed = {str(lim[k]) for k in ("auto_ils", "auto_usd", "daily_ils", "daily_usd")}
+    both = {str(lim[k]) for k in ("auto_ils", "auto_usd", "daily_ils", "daily_usd")}
+    reference = ({r["id"]: _amounts(r["explain"]) for r in reference_policy(answers)["rules"]}
+                 if answers else {})
     problems = []
     for rule in policy["rules"]:
         text, rule_id = rule["explain"], rule["id"]
-        amounts = [(a or b).replace(",", "") for a, b in _AMOUNT.findall(text)]
+        allowed = reference.get(rule_id) or both
         if rule["category"] != "payment" and ("₪" in text or "$" in text):
             problems.append(f"rule '{rule_id}': explain must not mention amounts or limits; "
                             "only payment rules do")
-        elif rule["category"] == "payment" and any(a not in allowed for a in amounts):
-            problems.append(f"rule '{rule_id}': explain mentions an amount that is not one of the two limits "
-                            f"({', '.join(sorted(allowed, key=int))})")
+        elif rule["category"] == "payment" and not _amounts(text) <= allowed:
+            problems.append(f"rule '{rule_id}': explain mentions an amount this rule is not about; "
+                            f"it may mention only {', '.join(sorted(allowed, key=int))}")
+        elif rule["category"] == "payment" and "$" in text and "₪" not in text:
+            problems.append(f"rule '{rule_id}': write amounts in shekels (₪), the owner's currency; a dollar "
+                            "amount may only follow the shekel amount, in parentheses")
         if not re.search("[א-ת]", text):
             problems.append(f"rule '{rule_id}': explain must be in Hebrew")
         if len(text) > MAX_EXPLAIN_CHARS:

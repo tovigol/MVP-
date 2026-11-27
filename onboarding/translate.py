@@ -42,8 +42,9 @@ through your rules, and rejects any rule set that does not behave the way the ow
 - category: one of payment | email_send | read | bulk_export.
 - effect: allow | ask | deny.
 - explain: ONE short plain-Hebrew sentence the owner can read, describing only what THIS rule does. Mention \
-shekel or dollar amounts only in payment rules, and only the limits from `limits` (for example "תשלום עד 2,000 ₪ \
-מתבצע אוטומטית"): never mention a limit in an email, read or export rule. Use the owner's own words, such as \
+amounts only in payment rules, only the two limits from `limits`, and always in shekels (for example "תשלום עד \
+2,000 ₪ מתבצע אוטומטית"): never give a dollar amount without the shekel amount, and never mention a limit in an \
+email, read or export rule. Use the owner's own words, such as \
 "כתובות במשרד", "כתובות קבועות", "כתובות לא מוכרות". Write simple, correct Hebrew. No jargon, no rule ids.
 - when: all listed conditions must hold; {} matches everything in the category. These are the ONLY operators:
   - amount_usd_lte (payment only): number in USD. The payment amount is <= this value.
@@ -147,7 +148,7 @@ def translate_answers(answers: dict, client=None, provider: str | None = None) -
             policy = build_policy(answers, normalize_rules(data["rules"]))
             llm_notes = [str(item) for item in data.get("unsupported", [])]
             problems = (validate_policy(policy) or semantic_problems(answers, policy)
-                        or explain_problems(policy))
+                        or explain_problems(policy, answers))
         except (json.JSONDecodeError, KeyError, TypeError, ValueError, AttributeError) as e:
             problems = [f"Output was not the expected JSON shape ({type(e).__name__}: {e})"]
 
@@ -166,7 +167,7 @@ def translate_answers(answers: dict, client=None, provider: str | None = None) -
 
 def _fallback(answers: dict, errors: list[str], reason: str, provider: str) -> TranslationResult:
     policy = build_policy(answers, baseline_rules(answers))
-    problems = validate_policy(policy) or semantic_problems(answers, policy) or explain_problems(policy)
+    problems = validate_policy(policy) or semantic_problems(answers, policy) or explain_problems(policy, answers)
     if problems:  # a bug in baseline_rules or in the answers: never write an invalid file
         raise RuntimeError("baseline policy failed validation: " + "; ".join(problems))
     return TranslationResult(policy, "fallback", limitation_notes(answers), errors, reason, provider)
