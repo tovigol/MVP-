@@ -44,6 +44,13 @@ def check_bind(host: str, token: str | None) -> None:
         )
 
 
+def _best_effort(fn, *args) -> None:
+    try:
+        fn(*args)
+    except Exception:
+        pass
+
+
 class Guard(Middleware):
     def __init__(self, token: str | None = None):
         self.token = token
@@ -76,7 +83,11 @@ class Guard(Middleware):
             raise ToolError("Denied: guard could not record this call") from exc
         if decision.effect == "ask":
             # Still no await since log_event: create the approval before waiting.
-            approval_id = store.create_approval(event_id)
+            try:
+                approval_id = store.create_approval(event_id)
+            except Exception as exc:
+                _best_effort(store.update_outcome, event_id, "timeout")
+                raise ToolError("Denied: guard could not record this call") from exc
             return await self._ask(context, call_next, event_id, approval_id)
         if decision.effect != "allow":
             reason = decision.reason_for_agent.rstrip(". ")
@@ -87,15 +98,16 @@ class Guard(Middleware):
         timeout = float(os.environ.get("GUARD_APPROVAL_TIMEOUT", 60))
         try:
             status = await store.wait_for_approval(approval_id, timeout)
-        except asyncio.CancelledError:
-            # The client gave up: close the approval so no stale buttons remain.
-            store.decide_approval(approval_id, "rejected", "timeout")
-            store.update_outcome(event_id, "timeout")
+            if status == "timeout":
+                # Close the approval first (needs outcome NULL), then record the outcome.
+                if not store.decide_approval(approval_id, "rejected", "timeout"):
+                    status = store.approval_status(approval_id)  # decided at the last moment
+        except BaseException:
+            # Cancelled or a store error: never leave a pending approval behind.
+            # Cleanup is best-effort and must not mask the original exception.
+            _best_effort(store.decide_approval, approval_id, "rejected", "timeout")
+            _best_effort(store.update_outcome, event_id, "timeout")
             raise
-        if status == "timeout":
-            # Close the approval first (needs outcome NULL), then record the outcome.
-            if not store.decide_approval(approval_id, "rejected", "timeout"):
-                status = store.approval_status(approval_id)  # owner decided at the last moment
         if status == "approved":
             store.update_outcome(event_id, "approved")
             return await self._forward(context, call_next, event_id)

@@ -280,3 +280,67 @@ def test_concurrent_payments_respect_daily_limit(tmp_guard, monkeypatch):
     assert sorted(e["effect"] for e in new) == ["allow", "ask"]
     assert sorted(e["outcome"] for e in new) == ["forwarded", "timeout"]
     assert len(mock_email_server.CALLS) == 1
+
+
+def _ctx(tool, args):
+    class Ctx:
+        class message:
+            name = tool
+            arguments = args
+    return Ctx
+
+
+def _seed_payment_policy():
+    policy.POLICY_PATH.write_text(json.dumps({
+        **POLICY,
+        "rules": [{"id": "daily-cap", "category": "payment", "effect": "allow",
+                   "when": {"daily_total_usd_lte": 300}, "explain": "Under daily cap"}],
+    }))
+    store.log_event("email_pay", {"amount": 19800}, policy.Decision("allow", "seed", "seed", "seed"),
+                    "payment", 198, "agent")
+
+
+def test_concurrent_payments_direct_no_await_before_log(tmp_guard, monkeypatch):
+    monkeypatch.setenv("GUARD_APPROVAL_TIMEOUT", "0")
+    _seed_payment_policy()
+    guard = gateway.Guard()
+    forwarded = []
+
+    async def fwd(ctx):
+        forwarded.append(1)
+        return "ok"
+
+    async def go():
+        return await asyncio.gather(
+            guard.on_call_tool(_ctx("email_pay", {"amount": 9900}), fwd),
+            guard.on_call_tool(_ctx("email_pay", {"amount": 9900}), fwd),
+            return_exceptions=True)
+
+    run(go())
+    new = [e for e in store.recent_events() if e["amount_usd"] == 99]
+    assert sorted(e["effect"] for e in new) == ["allow", "ask"]
+    assert sorted(e["outcome"] for e in new) == ["forwarded", "timeout"]
+    assert forwarded == [1]
+
+
+def test_ask_store_error_cleans_up(tmp_guard, monkeypatch):
+    async def boom(approval_id, timeout):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(store, "wait_for_approval", boom)
+    guard = gateway.Guard()
+
+    async def never(ctx):
+        raise AssertionError("must not forward")
+
+    with pytest.raises(RuntimeError, match="locked"):
+        run(guard.on_call_tool(_ctx("email_send_email", {"to": "x@external.com"}), never))
+    event = store.recent_events()[0]
+    assert event["outcome"] == "timeout"
+    assert store.approval_status(_only_approval_id()) == "rejected"
+    assert store.pending_approvals() == []
+
+
+def _only_approval_id():
+    with store.connect() as conn:
+        return conn.execute("SELECT id FROM approvals").fetchone()["id"]
