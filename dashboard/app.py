@@ -98,8 +98,6 @@ header[data-testid="stHeader"] {{ background: transparent; }}
 .ag-donut-legend {{ flex: 1; min-width: 160px; }}
 .ag-donut-row {{ display: flex; justify-content: space-between; font-size: 14px; color: #344054; padding: 7px 0;
                  border-bottom: 1px dashed #eef0f4; }}
-.ag-insight {{ margin-top: 14px; background: #fff4ec; border-radius: 12px; padding: 10px 14px; font-size: 13px;
-               color: #7a3410; }}
 
 .ag-item {{ padding: 12px 0; border-bottom: 1px solid #f2f4f7; }}
 .ag-item:last-child {{ border-bottom: 0; }}
@@ -230,17 +228,10 @@ def donut_card_html(c: dict) -> str:
     rows = "".join(
         f'<div class="ag-donut-row"><span><span class="ag-dot" style="background:{color}"></span>{label}</span>'
         f'<b>{round(100 * n / c["total"]) if c["total"] else 0}%</b></div>' for label, n, color in segments)
-    if not c["total"]:
-        insight = "Your numbers will appear after the assistant's first action."
-    elif c["automatic_pct"] >= 50:
-        insight = f"<b>{c['automatic_pct']}%</b> went through on their own, so you only saw the few that mattered."
-    else:
-        insight = "Many actions were sent for your approval today. Rules can be tuned in onboarding to cut the alerts."
     return (f'<div class="ag-card"><div class="ag-card-title">How actions were handled</div>'
             f'<div class="ag-card-sub">Today, by result</div><div class="ag-donut">'
             f'{charts.donut(segments, str(c["total"]), "actions today")}'
-            f'<div class="ag-donut-legend">{rows}</div></div>'
-            f'<div class="ag-insight">💡 {insight}</div></div>')
+            f'<div class="ag-donut-legend">{rows}</div></div></div>')
 
 
 def waiting_card_html(pending: list[dict]) -> str:
