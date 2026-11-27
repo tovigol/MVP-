@@ -142,8 +142,12 @@ def questions_step() -> None:
                 st.caption(f"If you don't answer: {q.default_note}")
                 if q.follow_up and raw[q.id]:
                     f = q.follow_up
-                    raw[f.id] = st.text_input(f.label, value=defaults.get(f.id, ""), placeholder=f.placeholder,
-                                              key=f.id)
+                    if f.kind == "amount":  # questions 1 and 2: the owner chooses the amount
+                        raw[f.id] = st.number_input(f.label, min_value=1, step=100, format="%d",
+                                                    value=int(defaults.get(f.id) or f.default), key=f.id)
+                    else:
+                        raw[f.id] = st.text_input(f.label, value=defaults.get(f.id, ""),
+                                                  placeholder=f.placeholder, key=f.id)
 
     if not st.button("Create my rules", type="primary", icon=":material/auto_awesome:"):
         return
