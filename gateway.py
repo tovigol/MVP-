@@ -11,6 +11,7 @@ FastMCP facts verified against installed fastmcp 4.2.6 source:
  NOTE: create_proxy on a single-server MCPConfig does NOT prefix tool names, so
      build_gateway mounts each upstream with namespace=<server name>.
 """
+import asyncio
 import hmac
 import os
 import sys
@@ -73,12 +74,38 @@ class Guard(Middleware):
             event_id = store.log_event(tool, args, decision, category, amount_usd, agent)
         except Exception as exc:
             raise ToolError("Denied: guard could not record this call") from exc
+        if decision.effect == "ask":
+            # Still no await since log_event: create the approval before waiting.
+            approval_id = store.create_approval(event_id)
+            return await self._ask(context, call_next, event_id, approval_id)
         if decision.effect != "allow":
-            if decision.effect == "ask":
-                # Task 4 replaces this with the approval flow.
-                store.update_outcome(event_id, "blocked")
             reason = decision.reason_for_agent.rstrip(". ")
             raise ToolError(f"Blocked by policy: {reason}. Tell the user.")
+        return await self._forward(context, call_next, event_id)
+
+    async def _ask(self, context, call_next, event_id: int, approval_id: str):
+        timeout = float(os.environ.get("GUARD_APPROVAL_TIMEOUT", 60))
+        try:
+            status = await store.wait_for_approval(approval_id, timeout)
+        except asyncio.CancelledError:
+            # The client gave up: close the approval so no stale buttons remain.
+            store.decide_approval(approval_id, "rejected", "timeout")
+            store.update_outcome(event_id, "timeout")
+            raise
+        if status == "timeout":
+            # Close the approval first (needs outcome NULL), then record the outcome.
+            if not store.decide_approval(approval_id, "rejected", "timeout"):
+                status = store.approval_status(approval_id)  # owner decided at the last moment
+        if status == "approved":
+            store.update_outcome(event_id, "approved")
+            return await self._forward(context, call_next, event_id)
+        if status == "rejected":
+            store.update_outcome(event_id, "rejected")
+            raise ToolError("The owner rejected this action.")
+        store.update_outcome(event_id, "timeout")
+        raise ToolError(f"Pending owner approval (id {approval_id}). Tell the user and stop.")
+
+    async def _forward(self, context, call_next, event_id: int):
         try:
             result = await call_next(context)
         except BaseException:

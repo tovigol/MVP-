@@ -90,6 +90,8 @@ def tmp_guard(tmp_path, monkeypatch):
         "email_fail": {"category": "payment", "risk": "write",
                        "amount_field": "amount", "amount_unit": "usd"},
         "email_export_all": {"category": "bulk_export", "risk": "destructive"},
+        "email_pay": {"category": "payment", "risk": "write",
+                      "amount_field": "amount", "amount_unit": "cents"},
     }
     reg = tmp_path / "registry.json"
     reg.write_text(json.dumps(registry))
@@ -162,13 +164,6 @@ def test_internal_email_allowed(tmp_guard):
     assert len(mock_email_server.CALLS) == 1
 
 
-def test_external_email_asks_and_is_blocked_for_now(tmp_guard):
-    r = _call_raw("email_send_email", {"to": "x@evil.com"})
-    assert r.is_error
-    assert r.content[0].text.startswith("Blocked by policy:")
-    assert store.recent_events()[0]["outcome"] == "blocked"
-    assert mock_email_server.CALLS == []
-
 
 def test_broken_policy_file_denies(tmp_guard):
     policy.POLICY_PATH.write_text("{")
@@ -181,3 +176,107 @@ def test_broken_policy_file_denies(tmp_guard):
     r = _call_raw("email_send_email", {"to": "bob@yossibakery.com"})
     assert not r.is_error
     assert store.recent_events()[0]["outcome"] == "forwarded"
+
+
+# --- ask flow -------------------------------------------------------------------
+
+def _decide_later(status, delay=0.3):
+    async def go():
+        await asyncio.sleep(delay)
+        while not (rows := store.pending_approvals()):
+            await asyncio.sleep(0.05)
+        assert store.decide_approval(rows[0]["approval_id"], status, "cli")
+    return go()
+
+
+def _call_with_decider(tool, args, status):
+    async def go():
+        async with Client(gateway.build_gateway(mock_server)) as c:
+            decider = asyncio.create_task(_decide_later(status))
+            r = await c.call_tool(tool, args, raise_on_error=False)
+            await decider
+            return r
+    return run(go())
+
+
+def test_ask_approved_forwards(tmp_guard):
+    r = _call_with_decider("email_send_email", {"to": "x@external.com"}, "approved")
+    assert not r.is_error
+    assert "sent to 1 recipients" in r.content[0].text
+    event = store.recent_events()[0]
+    assert event["effect"] == "ask"
+    assert event["outcome"] == "approved"
+    assert len(mock_email_server.CALLS) == 1
+
+
+def test_ask_rejected(tmp_guard):
+    r = _call_with_decider("email_send_email", {"to": "x@external.com"}, "rejected")
+    assert r.is_error
+    assert r.content[0].text == "The owner rejected this action."
+    assert store.recent_events()[0]["outcome"] == "rejected"
+    assert mock_email_server.CALLS == []
+
+
+def test_ask_timeout(tmp_guard, monkeypatch):
+    import re
+    monkeypatch.setenv("GUARD_APPROVAL_TIMEOUT", "0.5")
+    r = _call_raw("email_send_email", {"to": "x@external.com"})
+    assert r.is_error
+    m = re.fullmatch(r"Pending owner approval \(id (\w{8})\)\. Tell the user and stop\.",
+                     r.content[0].text)
+    assert m
+    assert store.recent_events()[0]["outcome"] == "timeout"
+    assert store.approval_status(m.group(1)) == "rejected"
+    assert store.pending_approvals() == []
+    assert mock_email_server.CALLS == []
+
+
+def test_ask_cancelled_marks_timeout(tmp_guard, monkeypatch):
+    monkeypatch.setenv("GUARD_APPROVAL_TIMEOUT", "30")
+    guard = gateway.Guard()
+
+    class Ctx:
+        class message:
+            name = "email_send_email"
+            arguments = {"to": "x@external.com"}
+
+    async def never(ctx):
+        raise AssertionError("must not forward")
+
+    async def go():
+        task = asyncio.create_task(guard.on_call_tool(Ctx, never))
+        while not store.pending_approvals():
+            await asyncio.sleep(0.05)
+        approval_id = store.pending_approvals()[0]["approval_id"]
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return approval_id
+
+    approval_id = run(go())
+    assert store.recent_events()[0]["outcome"] == "timeout"
+    assert store.approval_status(approval_id) == "rejected"
+
+
+def test_concurrent_payments_respect_daily_limit(tmp_guard, monkeypatch):
+    monkeypatch.setenv("GUARD_APPROVAL_TIMEOUT", "0")
+    policy.POLICY_PATH.write_text(json.dumps({
+        **POLICY,
+        "rules": [{"id": "daily-cap", "category": "payment", "effect": "allow",
+                   "when": {"daily_total_usd_lte": 300}, "explain": "Under daily cap"}],
+    }))
+    store.log_event("email_pay", {"amount": 19800}, policy.Decision("allow", "seed", "seed", "seed"),
+                    "payment", 198, "agent")
+
+    async def go():
+        async with Client(gateway.build_gateway(mock_server)) as c:
+            return await asyncio.gather(
+                c.call_tool("email_pay", {"amount": 9900}, raise_on_error=False),
+                c.call_tool("email_pay", {"amount": 9900}, raise_on_error=False))
+
+    run(go())
+    new = [e for e in store.recent_events() if e["agent"] == "agent" and e["amount_usd"] == 99]
+    assert len(new) == 2
+    assert sorted(e["effect"] for e in new) == ["allow", "ask"]
+    assert sorted(e["outcome"] for e in new) == ["forwarded", "timeout"]
+    assert len(mock_email_server.CALLS) == 1

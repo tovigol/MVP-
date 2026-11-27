@@ -30,6 +30,13 @@ def export_all() -> str:
 
 
 @mcp.tool
+def pay(amount: int) -> str:
+    """Pay an amount in cents."""
+    CALLS.append({"tool": "pay", "amount": amount})
+    return f"paid {amount}"
+
+
+@mcp.tool
 def fail(amount: int = 0) -> str:
     """Always raises (used to test error logging)."""
     raise RuntimeError("upstream exploded")
