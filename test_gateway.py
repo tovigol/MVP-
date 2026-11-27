@@ -344,3 +344,41 @@ def test_ask_store_error_cleans_up(tmp_guard, monkeypatch):
 def _only_approval_id():
     with store.connect() as conn:
         return conn.execute("SELECT id FROM approvals").fetchone()["id"]
+
+
+def test_startup_report_lists_unregistered():
+    registry = {"email_send_email": {"category": "email"}}
+    names = ["stripe_create_payment", "email_send_email", "crm_export_all"]
+    assert gateway.startup_report(names, registry) == ["stripe_create_payment", "crm_export_all"]
+    assert gateway.startup_report(names, {}) == names
+
+
+def _fake_root(tmp_path, files=("stripe_server.py", "email_server.py", "crm_server.py")):
+    for f in files:
+        (tmp_path / f).write_text("")
+    return tmp_path
+
+
+ENV = {"STRIPE_API_KEY": "rk_test_x", "RESEND_API_KEY": "re_x", "SMTP_HOST": "h",
+       "SMTP_PASS": "p", "EMAIL_FROM": "a@b.c", "SMTP_USER": "", "ANTHROPIC_API_KEY": "sk"}
+
+
+def test_build_upstreams_all_present(tmp_path):
+    root = _fake_root(tmp_path)
+    servers = gateway.build_upstreams(ENV, root)["mcpServers"]
+    assert set(servers) == {"stripe", "email", "crm"}
+    for name, s in servers.items():
+        assert s["command"] == gateway.sys.executable
+        assert s["args"] == [str(root / f"{name}_server.py")]
+    assert servers["stripe"]["env"] == {"STRIPE_API_KEY": "rk_test_x"}
+    assert servers["email"]["env"] == {"RESEND_API_KEY": "re_x", "SMTP_HOST": "h",
+                                       "SMTP_PASS": "p", "EMAIL_FROM": "a@b.c"}
+    assert "STRIPE_API_KEY" not in servers["email"]["env"]
+    assert not servers["crm"].get("env")
+
+
+def test_build_upstreams_skips_missing_server(tmp_path, capsys):
+    root = _fake_root(tmp_path, files=("email_server.py", "crm_server.py"))
+    servers = gateway.build_upstreams(ENV, root)["mcpServers"]
+    assert set(servers) == {"email", "crm"}
+    assert "WARNING" in capsys.readouterr().out

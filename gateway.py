@@ -17,7 +17,8 @@ import os
 import sys
 from pathlib import Path
 
-from fastmcp import FastMCP
+from dotenv import dotenv_values
+from fastmcp import Client, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server import create_proxy
 from fastmcp.server.dependencies import get_http_headers
@@ -25,14 +26,44 @@ from fastmcp.server.middleware import Middleware, MiddlewareContext
 from shared import store
 from shared.policy import Decision, evaluate, load_policy, load_registry, log_fields
 
-UPSTREAMS = {
-    "mcpServers": {
-        "email": {
-            "command": sys.executable,
-            "args": [str(Path(__file__).resolve().parent / "dev" / "mock_email_server.py")],
-        }
-    }
+ROOT = Path(__file__).resolve().parent
+
+# Which .env keys each upstream may see (exact names or prefixes).
+_ENV_RULES = {
+    "stripe": (("STRIPE_API_KEY",), ()),
+    "email": (("RESEND_API_KEY",), ("SMTP_", "EMAIL_")),
+    "crm": ((), ()),
 }
+
+
+def build_upstreams(env_values: dict, root: Path = ROOT) -> dict:
+    """Build the MCPConfig of real upstream servers; skip any whose file is missing.
+
+    env_values comes from dotenv_values (never load_dotenv), so keys never enter
+    the gateway's own os.environ. The mcp stdio transport starts each child with
+    a small safe default env (PATH, SYSTEMROOT, USERPROFILE, TEMP, ...), not the
+    parent's full env, plus the `env` given here. So the child can start on
+    Windows and sees only its own keys.
+    """
+    servers: dict = {}
+    for name, (exact, prefixes) in _ENV_RULES.items():
+        path = root / f"{name}_server.py"
+        if not path.is_file():
+            print(f"WARNING: {name} upstream skipped: {path} does not exist", flush=True)
+            continue
+        env = {k: v for k, v in env_values.items()
+               if v and (k in exact or k.startswith(prefixes))}
+        servers[name] = {"command": sys.executable, "args": [str(path)], "env": env}
+    return {"mcpServers": servers}
+
+
+UPSTREAMS = build_upstreams(dotenv_values(ROOT / ".env"))
+
+
+def startup_report(tool_names: list[str], registry: dict) -> list[str]:
+    """Tool names that have no registry entry (order kept)."""
+    return [t for t in tool_names if t not in registry]
+
 
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
@@ -150,7 +181,18 @@ def main() -> None:
     port = int(os.environ.get("GUARD_PORT", "8080"))
     token = os.environ.get("GUARD_TOKEN") or None
     check_bind(host, token)
-    build_gateway(UPSTREAMS, token).run(transport="http", host=host, port=port, path="/mcp")
+    gw = build_gateway(UPSTREAMS, token)
+
+    async def list_tools() -> list[str]:
+        async with Client(gw) as c:
+            return [t.name for t in await c.list_tools()]
+
+    try:
+        for name in startup_report(asyncio.run(list_tools()), load_registry()):
+            print(f"WARNING: tool {name} is not in the registry (it will be denied)", flush=True)
+    except Exception as exc:
+        print(f"WARNING: startup check failed: {exc}", flush=True)
+    gw.run(transport="http", host=host, port=port, path="/mcp")
 
 
 if __name__ == "__main__":
